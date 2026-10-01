@@ -1,0 +1,19 @@
+{
+  "workers": {
+    "local": {
+      "provider": "ollama",
+      "label": "Local GPU (Ollama)",
+      "baseUrl": "http://localhost:11434",
+      "model": "qwen3.8:27b",
+      "numCtx": 65536
+    },
+    "chatgpt": {
+      "provider": "codex-cli",
+      "label": "ChatGPT (Codex CLI)"
+    }
+  },
+  "roles": {
+    "scout": ["local", "chatgpt"],
+    "reviewer": ["chatgpt"]
+  }
+}

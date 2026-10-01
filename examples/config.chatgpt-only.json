@@ -1,0 +1,12 @@
+{
+  "workers": {
+    "chatgpt": {
+      "provider": "codex-cli",
+      "label": "ChatGPT (Codex CLI)"
+    }
+  },
+  "roles": {
+    "scout": ["chatgpt"],
+    "reviewer": ["chatgpt"]
+  }
+}

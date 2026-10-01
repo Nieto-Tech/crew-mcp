@@ -1,0 +1,48 @@
+{
+  "name": "@nieto-tech/crew-mcp",
+  "version": "0.2.0",
+  "description": "MCP server that gives Claude Code a crew: a local GPU model and ChatGPT for recon, diff review, second opinions and deterministic checks.",
+  "license": "MIT",
+  "author": "Nieto Technology Partners <opensource@nieto.com>",
+  "homepage": "https://github.com/Nieto-Tech/crew-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nieto-Tech/crew-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nieto-Tech/crew-mcp/issues"
+  },
+  "type": "module",
+  "bin": {
+    "crew-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "examples",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "npm run build && node scripts/test.mjs",
+    "bench": "npm run build && node bench/run.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "private": true
+}

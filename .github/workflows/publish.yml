@@ -1,0 +1,34 @@
+name: Publish to npm
+
+# Manual only: run it from the Actions tab. It never runs on push, tag or release.
+# package.json has "private": true, which makes `npm publish` refuse; remove that deliberately
+# when the package is ready to go public.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (npm publish --dry-run): build, test and pack, but publish nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # npm provenance: lets npm verify this build came from this workflow
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm # add required reviewers to this environment in the repo settings
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Publish
+        run: npm publish --provenance --access public ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

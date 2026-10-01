@@ -1,0 +1,22 @@
+{
+  "_comment": "EXPERIMENTAL: tested against a fake OpenAI-compatible server in the test suite; not yet run against a real llama-server or vLLM. crew reads only \"workers\" and \"roles\" from this file.",
+  "workers": {
+    "llamacpp": {
+      "provider": "openai",
+      "label": "llama-server (local)",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "model": "qwen3.8-27b",
+      "thinkingParam": "chat_template_kwargs",
+      "readBudgetChars": 100000,
+      "timeoutMs": 300000
+    },
+    "chatgpt": {
+      "provider": "codex-cli",
+      "label": "ChatGPT (Codex CLI)"
+    }
+  },
+  "roles": {
+    "scout": ["llamacpp", "chatgpt"],
+    "reviewer": ["chatgpt"]
+  }
+}

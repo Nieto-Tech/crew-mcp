@@ -1,0 +1,22 @@
+{
+  "workers": {
+    "lmstudio": {
+      "provider": "openai",
+      "label": "LM Studio (local)",
+      "baseUrl": "http://localhost:1234/v1",
+      "model": "your-local-model-id",
+      "readBudgetChars": 40000
+    },
+    "openai-api": {
+      "provider": "openai",
+      "label": "OpenAI API",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "model": "your-openai-model"
+    }
+  },
+  "roles": {
+    "scout": ["lmstudio", "openai-api"],
+    "reviewer": ["openai-api"]
+  }
+}
