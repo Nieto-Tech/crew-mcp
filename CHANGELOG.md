@@ -6,6 +6,17 @@ All notable changes to crew-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-02
+
+### Fixed
+- A scout that stops exploring with only a lead-in ("I have enough to answer. Final report:") no
+  longer comes back as an empty answer marked "reformatted". An answer that isn't the task's JSON
+  on a turn that still offered tools is now redone as the forced final turn before any reformat
+  turn, and a reformat that yields an all-empty skeleton counts as failed (unstructured).
+- When a task uses up its malformed tool call retries, the error now says so.
+
+## [0.2.0] - 2026-10-01
+
 ### Added
 - Benchmark task files: `npm run bench -- --tasks-file <module>` takes a pinned repo, review tasks
   planted from `.diff` files, and recon tasks, each with its own scoring rules. `--check` runs a
@@ -31,11 +42,6 @@ All notable changes to crew-mcp are recorded here. The format follows
   Node can't do for a `.cmd` file without a shell.
 - Windows: benchmark worktrees are checked out without CRLF conversion, so `.diff` plants apply.
 - Benchmark scoring: an over-reservation pattern no longer matches inside an identifier.
-- A scout that stops exploring with only a lead-in ("I have enough to answer. Final report:") no
-  longer comes back as an empty answer marked "reformatted". An answer that isn't the task's JSON
-  on a turn that still offered tools is now redone as the forced final turn before any reformat
-  turn, and a reformat that yields an all-empty skeleton counts as failed (unstructured).
-- When a task uses up its malformed tool call retries, the error now says so.
 
 ## History before 0.2.0
 
@@ -56,4 +62,6 @@ The 0.1.x series was developed privately. In summary:
   only restructure (no new file paths or evidence quotes); reformat turns logged to an owner-only
   file; up to two retries per task for malformed tool calls.
 
-[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/commits/main
+[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.1...main
+[0.2.1]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/Nieto-Tech/crew-mcp/releases/tag/v0.2.0
