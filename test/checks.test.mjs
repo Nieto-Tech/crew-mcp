@@ -1,7 +1,7 @@
-// Unit tests for the reformat guard (introducedBy). No server, no model.
+// Unit tests for the reformat guard (introducedBy, hasContent). No server, no model.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { introducedBy } from "../dist/checks.js";
+import { hasContent, introducedBy } from "../dist/checks.js";
 
 const RAW = "In src/pay.ts at line 38, `invoice.balance += amount;   // refund` refunds anything. Also see coverage in src/lib/util.ts.";
 const finding = (o = {}) => ({ summary: "s", findings: [{ severity: "high", file: "src/pay.ts", line: 38, claim: "a reworded claim is fine", evidence: "invoice.balance += amount; // refund", suggestion: "new words are fine", ...o }] });
@@ -25,4 +25,13 @@ test("introducedBy: a path or quote the raw answer never had is returned", () =>
 test("introducedBy: a near-JSON raw answer's escaped quotes still match", () => {
   const raw = '{"summary": "s", "findings": [{"file": "src/a.ts", "evidence": "const x = \\"a\\";\\nreturn x;"}],}';
   assert.equal(introducedBy({ findings: [{ file: "src/a.ts", evidence: 'const x = "a"; return x;' }] }, raw), null);
+});
+
+test("hasContent: an all-empty skeleton says nothing; any non-blank string at any depth does", () => {
+  assert.equal(hasContent({ summary: "", files: [], functions: [], coverage: [], risks: [], openQuestions: [] }), false);
+  assert.equal(hasContent({ summary: "  ", findings: [{ file: "", line: 0, claim: "" }] }), false, "whitespace and numbers don't count");
+  assert.equal(hasContent({ summary: "", findings: [] , x: null }), false);
+  assert.equal(hasContent({ summary: "No issues found.", findings: [] }), true, "a clean review with a summary is an answer");
+  assert.equal(hasContent({ summary: "", files: [{ path: "src/pay.ts", why: "" }] }), true);
+  assert.equal(hasContent({ summary: "", functions: ["chargeInvoice"] }), true);
 });

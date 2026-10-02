@@ -59,6 +59,12 @@ export const normalizeWs = (s: string) => String(s).replace(/\s+/g, " ").trim();
 
 /* ---------- Reformat guard ---------- */
 
+/** True when a parsed answer says anything: a non-blank string at any depth. An all-empty skeleton says nothing. */
+export const hasContent = (v: unknown): boolean =>
+  typeof v === "string" ? v.trim() !== ""
+  : Array.isArray(v) ? v.some(hasContent)
+  : !!v && typeof v === "object" && Object.values(v).some(hasContent);
+
 /** The strings a reformat must not invent: file paths (`file`, `path`, `files`) and quoted `evidence`, anywhere in the JSON. */
 function groundedStrings(v: unknown, out: { kind: "path" | "evidence"; value: string }[] = []) {
   if (Array.isArray(v)) for (const x of v) groundedStrings(x, out);
