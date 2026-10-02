@@ -56,11 +56,12 @@ function ollamaReply(body) {
 // The prose answers the reformat turn is given, and the finding prose-model's JSON then carries.
 const PROSE_RECON = "Charging lives in src/pay.ts: chargeInvoice subtracts the amount from invoice.balance and returns the invoice. No other files are involved.";
 const PROSE_REVIEW = "One real problem: in src/pay.ts line 38, `invoice.balance += amount; // refund` refunds any amount without checking it against what was paid. Cap refunds at the amount paid.";
+const LEAD_IN = "I have enough to answer. Final report:";
 const PROSE_FINDING = { severity: "high", category: "data-integrity", file: "src/pay.ts", line: 38, claim: "refund does not check the amount against what was paid", evidence: "invoice.balance += amount; // refund", suggestion: "cap refunds at amount paid" };
 
 before(async () => {
   ollama = http.createServer(async (req, res) => {
-    if (req.url === "/api/tags") { res.end(JSON.stringify({ models: [{ name: "test-model:latest" }, { name: "slow-model:latest" }, { name: "drip-model:latest" }, { name: "gate-model:latest" }, { name: "redirect-model:latest" }, { name: "trunc-model:latest" }, { name: "emptythink-model:latest" }, { name: "alwaysempty-model:latest" }, { name: "cutoff-model:latest" }, { name: "malformed-model:latest" }, { name: "badtool-model:latest" }, { name: "crash-model:latest" }, { name: "tagcase-model:Q4_K_M" }, { name: "prose-model:latest" }, { name: "proseonly-model:latest" }, { name: "proseerr-model:latest" }, { name: "invent-model:latest" }, { name: "plan-model:latest" }] })); return; }
+    if (req.url === "/api/tags") { res.end(JSON.stringify({ models: [{ name: "test-model:latest" }, { name: "slow-model:latest" }, { name: "drip-model:latest" }, { name: "gate-model:latest" }, { name: "redirect-model:latest" }, { name: "trunc-model:latest" }, { name: "emptythink-model:latest" }, { name: "alwaysempty-model:latest" }, { name: "cutoff-model:latest" }, { name: "malformed-model:latest" }, { name: "badtool-model:latest" }, { name: "crash-model:latest" }, { name: "tagcase-model:Q4_K_M" }, { name: "prose-model:latest" }, { name: "proseonly-model:latest" }, { name: "proseerr-model:latest" }, { name: "invent-model:latest" }, { name: "plan-model:latest" }, { name: "lead-model:latest" }, { name: "leadonly-model:latest" }] })); return; }
     let b = ""; for await (const c of req) b += c;
     if (req.url === "/leak") { leaks++; res.end("{}"); return; } // a redirected prompt would land here
     const body = JSON.parse(b);
@@ -114,6 +115,15 @@ before(async () => {
       // One tool call, then the prose answer: prose-model gives it on its own (tools still offered), the others on the forced final turn.
       if (body.tools && !body.messages.some((m) => m.role === "tool")) return reply("", { message: { tool_calls: [{ function: { name: "list_files", arguments: {} } }] } });
       return reply(first.includes("Review this change") ? PROSE_REVIEW : PROSE_RECON);
+    }
+    if (body.model === "lead-model" || body.model === "leadonly-model") {
+      // Stops exploring on its own with only a lead-in, whose reformat is an empty skeleton. On the forced final turn
+      // lead-model writes the answer; leadonly-model writes the lead-in again.
+      const first = body.messages.find((m) => m.role === "user").content;
+      if (first.startsWith("Return only this content as JSON")) return reply(recon(""));
+      if (body.tools && !body.messages.some((m) => m.role === "tool")) return reply("", { message: { tool_calls: [{ function: { name: "list_files", arguments: {} } }] } });
+      if (!body.tools && body.model === "lead-model") return reply(recon("answer after the empty lead-in"));
+      return reply(LEAD_IN);
     }
     if (body.model === "plan-model") {
       if (malformedPlan.shift()) { res.statusCode = 500; res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ error: "XML syntax error on line 7: element <parameter> closed by </function>" })); return; }
@@ -174,6 +184,8 @@ before(async () => {
       proseonly: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "proseonly-model", maxTurns: 2 },
       invent: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "invent-model" },
       plan: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "plan-model", maxTurns: 6 },
+      lead: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "lead-model" },
+      leadonly: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "leadonly-model" },
       proseerr: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "proseerr-model", maxTurns: 2 },
       trunc: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "trunc-model" },
       redirect: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "redirect-model" },
@@ -717,9 +729,10 @@ test("a correct answer in prose gets one reformat turn: its own text, the schema
   assert.match(out, /^_reformatted: /m, "diagnostics say so");
   assert.doesNotMatch(out, /did not return structured output/);
   const mine = requests.slice(before);
-  assert.equal(mine.length, 3, "tools turn, prose answer, one reformat");
-  assert.ok(mine[1].tools, "the prose answer came on a normal turn (tools offered), not a forced final one");
-  const re = mine[2];
+  assert.equal(mine.length, 4, "tools turn, prose answer, forced final (prose again), one reformat");
+  assert.ok(mine[1].tools, "the first prose answer came on a normal turn (tools offered)");
+  assert.equal(mine[2].tools, undefined, "a natural answer that isn't JSON is redone as the forced final turn first");
+  const re = mine[3];
   assert.equal(re.messages.length, 1, "a fresh one-message conversation, not the history");
   const msg = re.messages[0].content;
   assert.ok(msg.startsWith("Return only this content as JSON matching the schema; add nothing, drop nothing."), msg.slice(0, 120));
@@ -824,6 +837,33 @@ test("if the reformat request itself errors, the task still returns the original
   assert.match(r.content[0].text, /^_reformat failed: /m);
   assert.ok(r.content[0].text.includes(PROSE_RECON));
   assert.equal(requests.slice(before).length, 3, "the error is not retried");
+  await c.close();
+});
+
+test("a lead-in with no answer, on a turn that still offered tools, is redone as the forced final turn before any reformat", async () => {
+  const c = await connect({ CREW_SCOUT: "lead" });
+  const before = requests.length;
+  const out = await call(c, "crew_recon", { question: "map charging" });
+  assert.match(out, /answer after the empty lead-in/);
+  assert.doesNotMatch(out, /^_reformat/m, "the final turn answered in JSON: no reformat turn");
+  const mine = requests.slice(before);
+  assert.equal(mine.length, 3, "tool call, lead-in, forced final");
+  assert.equal(mine[2].tools, undefined, "the redo is the forced final turn");
+  assert.match(mine[2].messages.at(-1).content, /Stop exploring now/);
+  assert.ok(!mine[2].messages.some((m) => m.role === "assistant" && m.content === LEAD_IN), "the lead-in isn't kept in the history");
+  await c.close();
+});
+
+test("a lead-in on the forced final turn too is unstructured, not an empty skeleton passed off as reformatted", async () => {
+  const c = await connect({ CREW_SCOUT: "leadonly" });
+  const before = requests.length;
+  const r = await c.callTool({ name: "crew_recon", arguments: { question: "map charging" } });
+  assert.ok(!r.isError, r.content[0].text);
+  const out = r.content[0].text;
+  assert.match(out, /did not return structured output/);
+  assert.match(out, /^_reformat failed: /m);
+  assert.ok(out.includes(LEAD_IN), "the raw lead-in is what's shown");
+  assert.equal(requests.slice(before).length, 4, "tool call, lead-in, forced final, one reformat");
   await c.close();
 });
 
@@ -977,6 +1017,7 @@ test("a model that is always malformed fails after exactly two retries", async (
   const r = await c.callTool({ name: "crew_recon", arguments: { question: "map charging" } });
   assert.equal(r.isError, true);
   assert.match(r.content[0].text, /XML syntax error/);
+  assert.match(r.content[0].text, /gave up: all 2 malformed tool call retries for this task were used/);
   assert.equal(requests.slice(before).length, 3, "first try and two nudged retries");
   await c.close();
 });

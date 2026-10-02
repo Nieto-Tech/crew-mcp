@@ -1,5 +1,5 @@
 import { Budget, Workspace } from "./workspace.js";
-import { extractJson, introducedBy } from "./checks.js";
+import { extractJson, hasContent, introducedBy } from "./checks.js";
 import type { WorkerConfig } from "./config.js";
 
 export interface ToolCall {
@@ -417,7 +417,10 @@ export async function runAgent(opts: {
       try {
         return await opts.provider.chat(sent, tools, opts.signal, final, noThink);
       } catch (e) {
-        if (!(e instanceof ToolCallParseError) || stats.malformedRetries >= MAX_MALFORMED_RETRIES) throw e;
+        if (!(e instanceof ToolCallParseError)) throw e;
+        if (stats.malformedRetries >= MAX_MALFORMED_RETRIES) {
+          throw new ToolCallParseError(`${e.message} (gave up: all ${MAX_MALFORMED_RETRIES} malformed tool call retries for this task were used)`);
+        }
         stats.malformedRetries++;
         opts.onLog?.(`${MALFORMED_NOTE} (${stats.malformedRetries}/${MAX_MALFORMED_RETRIES}): ${e.message}`);
         sent = [...messages, { role: "user", content: malformedNudge(!!tools) }];
@@ -481,6 +484,15 @@ export async function runAgent(opts: {
       opts.onLog?.(`turn ${turn}: answer hit the exploration token cap, redoing as final turn`);
       continue;
     }
+    // The model stopped exploring on its own with something that isn't the task's JSON. Often that's no answer at
+    // all, only a lead-in ("Final report:", "Let me read X") whose report or tool call never came; a reformat turn
+    // then dresses it up as an empty or invented answer. Redo it as the final turn, which says to answer now in
+    // the required format; a prose answer there still gets the reformat turn below.
+    if (!finalTurn && !reply.toolCalls.length && opts.answer && !extractJson(reply.content, opts.answer.isValid)) {
+      forceFinal = true;
+      opts.onLog?.(`turn ${turn}: answer wasn't the task's JSON (${reply.content.trim().length} chars), redoing as final turn`);
+      continue;
+    }
 
     const calls = finalTurn ? [] : reply.toolCalls;
     opts.onLog?.(
@@ -488,7 +500,7 @@ export async function runAgent(opts: {
         `${secs(Date.now() - t0)}s, ${reply.evalCount ?? "?"} tokens generated`
     );
     if (!calls.length) {
-      // The answer (a natural one or the forced final) still isn't the task's JSON, often a correct answer in prose:
+      // The final answer still isn't the task's JSON, often a correct answer in prose:
       // one turn that only re-emits it as JSON. A fresh one-message conversation, not the history; thinking off; a
       // cap sized to the answer. It may only restructure: a file path or evidence quote that isn't in the raw answer
       // gets the whole reformat rejected. If it fails or is rejected, the raw answer stands and the caller reports it
@@ -504,11 +516,14 @@ export async function runAgent(opts: {
           );
           stats.evalTokens += re.evalCount || 0;
           const parsed = extractJson(re.content, opts.answer.isValid);
-          const introduced = parsed ? introducedBy(parsed, raw) : null;
-          stats.reformat = !parsed ? "failed" : introduced ? "rejected" : "ok";
+          // An all-empty skeleton means the raw answer had nothing to keep, e.g. a lead-in ("Final report:") whose
+          // report was never written, even on the final turn. That is no answer, not a reformatted one.
+          const blank = !!parsed && !hasContent(parsed);
+          const introduced = parsed && !blank ? introducedBy(parsed, raw) : null;
+          stats.reformat = !parsed || blank ? "failed" : introduced ? "rejected" : "ok";
           reformatDetail = { raw, reply: re.content, ...(introduced ? { introduced } : {}) };
           opts.onLog?.(
-            `${reformatNote(stats.reformat)}${introduced ? `: introduced ${introduced}` : ""}: eval_count ${re.evalCount ?? "?"}, ` +
+            `${reformatNote(stats.reformat)}${blank ? ": the re-emitted JSON is empty" : introduced ? `: introduced ${introduced}` : ""}: eval_count ${re.evalCount ?? "?"}, ` +
               `done_reason ${re.doneReason ?? "?"}, content ${re.content.length} chars`
           );
           if (stats.reformat === "ok") reply = re;

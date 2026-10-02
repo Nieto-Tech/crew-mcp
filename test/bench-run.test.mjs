@@ -160,7 +160,10 @@ before(async () => {
     if (body.model === "fake-prose" && user.startsWith("Return only this content as JSON")) return reply(reconJson()); // crew's reformat turn
     if (user.includes("Reconnaissance request")) {
       if (!used) return reply("", { tool_calls: [{ function: { name: "list_files", arguments: {} } }] });
-      if (body.model === "fake-prose" && !proseAnswered) { proseAnswered = true; return reply(`Three files: ${HOOK}, ${TOTALS} and ${MIG}.`); } // prose, once
+      if (body.model === "fake-prose" && !proseAnswered) { // prose until the forced final turn, once
+        if (!body.tools) proseAnswered = true;
+        return reply(`Three files: ${HOOK}, ${TOTALS} and ${MIG}.`);
+      }
       return reply(reconJson(good));
     }
     if (user.includes("Review this change") && user.includes("forUpdate")) { // the hard diff

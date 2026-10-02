@@ -31,6 +31,11 @@ All notable changes to crew-mcp are recorded here. The format follows
   Node can't do for a `.cmd` file without a shell.
 - Windows: benchmark worktrees are checked out without CRLF conversion, so `.diff` plants apply.
 - Benchmark scoring: an over-reservation pattern no longer matches inside an identifier.
+- A scout that stops exploring with only a lead-in ("I have enough to answer. Final report:") no
+  longer comes back as an empty answer marked "reformatted". An answer that isn't the task's JSON
+  on a turn that still offered tools is now redone as the forced final turn before any reformat
+  turn, and a reformat that yields an all-empty skeleton counts as failed (unstructured).
+- When a task uses up its malformed tool call retries, the error now says so.
 
 ## History before 0.2.0
 
