@@ -362,7 +362,7 @@ export function laneView(w: WorkerConfig): LaneView {
   if (!placed) queued.push(...mine);
   const h = started[0];
   const holder = h
-    ? { tool: h.tool, workspace: h.workspace, heldMs: now - (h.startedAt ?? h.mtimeMs), thisSession: h.pid === process.pid }
+    ? { tool: h.tool, workspace: h.workspace, heldMs: Math.max(0, now - (h.startedAt ?? h.mtimeMs)), thisSession: h.pid === process.pid }
     : lane.running
       ? { tool: lane.running.tool, workspace: lane.running.workspace, heldMs: now - lane.running.startedAt, thisSession: true }
       : undefined;
