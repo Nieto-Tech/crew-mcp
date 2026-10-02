@@ -17,7 +17,7 @@ import { loadCodeMap, mapNote, mapStatus } from "./codemap.js";
 import { CREW_INSTRUCTIONS } from "./instructions.js";
 import { formatStats, readUsage, recordReformat, recordUsage, todayLine, type Outcome, type Period } from "./usage.js";
 
-export const VERSION = "0.2.1";
+export const VERSION = "0.3.0";
 
 // Usage guidance travels with the server, so no CLAUDE.md snippet is needed.
 const server = new McpServer({ name: "crew", version: VERSION }, { instructions: CREW_INSTRUCTIONS });

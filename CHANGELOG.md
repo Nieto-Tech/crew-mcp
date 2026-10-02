@@ -6,6 +6,8 @@ All notable changes to crew-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-02
+
 ### Changed
 - Local workers now queue across every crew process on the machine, not just within one
   session. Each Claude Code session runs its own crew server, so two sessions used to hit the
@@ -82,6 +84,7 @@ The 0.1.x series was developed privately. In summary:
   only restructure (no new file paths or evidence quotes); reformat turns logged to an owner-only
   file; up to two retries per task for malformed tool calls.
 
-[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.1...main
+[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.3.0...main
+[0.3.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Nieto-Tech/crew-mcp/releases/tag/v0.2.0
