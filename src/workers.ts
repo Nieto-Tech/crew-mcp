@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { budgetsFor, userConfigPath, type CrewConfig, type WorkerConfig } from "./config.js";
+import { acquire } from "./lane.js";
 import { isLocalWorker, loadPolicy, policyReason, type Policy } from "./policy.js";
 import { OllamaProvider, OpenAIProvider, diagLine, runAgent, type AgentStats, type AnswerSpec, type FinalRetry, type Reformat, type ReformatDetail } from "./agent.js";
 import { runCodex } from "./codex.js";
@@ -109,64 +110,6 @@ export async function resolveRole(config: CrewConfig, role: "scout" | "reviewer"
   throw new Error(`No available worker for role "${role}". Tried:\n- ${tried.join("\n- ")}\nRun crew_status for details.`);
 }
 
-/* ---------- one request at a time per local worker ---------- */
-
-// A local GPU can't usefully run two agent loops at once: they fight over the same
-// model, and each one's clock would be burning while it waits. Later calls queue.
-interface Lane {
-  tail: Promise<void>;
-  running: number;
-  waiting: number;
-  /** When the current holder got the worker. */
-  busySince: number;
-}
-const lanes = new Map<string, Lane>();
-
-/** Workers sharing a server share a lane (two entries pointing at one Ollama are one GPU). */
-const laneKey = (w: WorkerConfig) =>
-  `${w.provider}:${(w.baseUrl || (w.provider === "ollama" ? "http://localhost:11434" : "https://api.openai.com/v1")).replace(/\/$/, "")}`;
-
-export function laneStatus(w: WorkerConfig): { running: number; waiting: number } {
-  const l = lanes.get(laneKey(w));
-  return { running: l?.running ?? 0, waiting: l?.waiting ?? 0 };
-}
-
-async function acquire(w: WorkerConfig, name: string, waitMs: number): Promise<() => void> {
-  const key = laneKey(w);
-  let lane = lanes.get(key);
-  if (!lane) lanes.set(key, (lane = { tail: Promise.resolve(), running: 0, waiting: 0, busySince: 0 }));
-  const prev = lane.tail;
-  let release!: () => void;
-  lane.tail = new Promise<void>((r) => (release = r));
-  lane.waiting++;
-  let timer: NodeJS.Timeout | undefined;
-  const expired = Symbol("expired");
-  const won = await Promise.race([
-    prev,
-    new Promise<typeof expired>((r) => (timer = setTimeout(() => r(expired), waitMs))),
-  ]);
-  clearTimeout(timer);
-  if (won === expired) {
-    // Give up our place, but keep the chain intact: whoever queued behind us still waits on `prev`.
-    const depth = lane.waiting;
-    const busyFor = Math.round((Date.now() - lane.busySince) / 1000);
-    lane.waiting--;
-    prev.then(() => release());
-    throw new Error(
-      `Worker "${name}" is busy: gave up after waiting ${Math.round(waitMs / 1000)}s in the queue ` +
-        `(${depth} waiting including this call; the current call has held the worker for ${busyFor}s). ` +
-        `Fix: retry later, or raise queueWaitMs for "${name}" in ${userConfigPath()}.`
-    );
-  }
-  lane.waiting--;
-  lane.running++;
-  lane.busySince = Date.now();
-  return () => {
-    lane!.running--;
-    release();
-  };
-}
-
 export interface TaskResult {
   text: string;
   worker: string;
@@ -221,11 +164,12 @@ export async function runTask(opts: {
   const { name, w, skipped } = await resolveRole(opts.config, opts.role, policy);
   const b = budgetsFor(w);
 
-  // Serialize local workers. The timeout clock starts only once we hold the worker.
+  // Serialize local workers, across every crew process on this machine. The timeout clock starts only once we hold the worker.
   const queuedAt = Date.now();
   const serialize = w.provider !== "codex-cli" && isLocalWorker(w);
-  if (serialize && laneStatus(w).running) opts.onProgress?.(`${w.label || name} is busy, queued…`);
-  const release = serialize ? await acquire(w, name, b.queueWaitMs) : () => {};
+  const release = serialize
+    ? await acquire(w, name, { waitMs: b.queueWaitMs, yieldMs: b.reconYieldMs, workspace: path.basename(opts.ws.root), tool: opts.tool || opts.role, onWait: opts.onProgress })
+    : () => {};
   const started = Date.now();
   const queuedMs = started - queuedAt;
 
@@ -233,10 +177,11 @@ export async function runTask(opts: {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), b.timeoutMs);
   const stats: AgentStats = { turns: 0, toolCalls: 0, modelMs: 0, evalTokens: 0, malformedRetries: 0 };
-  opts.onProgress?.(`${w.label || name} (${w.model || w.provider}) working…`);
-  log(`${opts.role} → ${name}${skipped.length ? ` (skipped: ${skipped.join("; ")})` : ""}${queuedMs >= 100 ? ` (queued ${(queuedMs / 1000).toFixed(1)}s)` : ""}`);
 
+  // Everything from here on is inside the try, so the worker is always released.
   try {
+    opts.onProgress?.(`${w.label || name} (${w.model || w.provider}) working…`);
+    log(`${opts.role} → ${name}${skipped.length ? ` (skipped: ${skipped.join("; ")})` : ""}${queuedMs >= 100 ? ` (queued ${(queuedMs / 1000).toFixed(1)}s)` : ""}`);
     if (w.provider === "codex-cli") {
       const text = await runCodex({
         w,

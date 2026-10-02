@@ -6,6 +6,28 @@ All notable changes to crew-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-02
+
+### Changed
+- Local workers now queue across every crew process on the machine, not just within one
+  session. Each Claude Code session runs its own crew server, so two sessions used to hit the
+  local GPU at once. Calls now queue through ticket files under `~/.local/state/crew/lanes/`,
+  and sessions take turns. A ticket left by a crashed session is cleared automatically.
+- `queueWaitMs` defaults to 10 minutes (was 60s). A typical local call takes 1.5-2 minutes, so
+  with a 60s limit a second call sent in parallel always failed.
+- A queued call sends progress notes naming the call holding the worker and an estimated
+  wait. The busy error and `crew_status` show the same, and the error tells Claude not to
+  resend the call right away or in parallel.
+- The instructions sent to Claude say the local GPU runs one call at a time for every session,
+  so parallel calls queue instead of finishing sooner. They also say to hand a recon that isn't
+  needed right away to a background subagent, so the session keeps working while it queues.
+
+### Added
+- Reviews go ahead of recons in the local queue. Every other call goes ahead of a waiting
+  `crew_recon`, within a session and across sessions, until that recon has waited
+  `reconYieldMs` (new, default 3 min); after that nothing passes it. Started calls are never
+  interrupted.
+
 ## [0.2.1] - 2026-10-02
 
 ### Fixed
@@ -62,6 +84,7 @@ The 0.1.x series was developed privately. In summary:
   only restructure (no new file paths or evidence quotes); reformat turns logged to an owner-only
   file; up to two retries per task for malformed tool calls.
 
-[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.1...main
+[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.3.0...main
+[0.3.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Nieto-Tech/crew-mcp/releases/tag/v0.2.0
