@@ -168,7 +168,7 @@ export async function runTask(opts: {
   const queuedAt = Date.now();
   const serialize = w.provider !== "codex-cli" && isLocalWorker(w);
   const release = serialize
-    ? await acquire(w, name, { waitMs: b.queueWaitMs, workspace: path.basename(opts.ws.root), tool: opts.tool || opts.role, onWait: opts.onProgress })
+    ? await acquire(w, name, { waitMs: b.queueWaitMs, yieldMs: b.reconYieldMs, workspace: path.basename(opts.ws.root), tool: opts.tool || opts.role, onWait: opts.onProgress })
     : () => {};
   const started = Date.now();
   const queuedMs = started - queuedAt;

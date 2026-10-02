@@ -17,7 +17,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serverJs = path.join(here, "..", "dist", "index.js");
 const fakeCodex = path.join(here, "fixtures", "fake-codex.mjs");
 
-let ollama, port, repo, cfgFile, requests = [], leaks = 0, gateInflight = 0, gateMax = 0;
+let ollama, port, repo, cfgFile, requests = [], leaks = 0, gateInflight = 0, gateMax = 0, gateOrder = [];
 let malformedPlan = []; // plan-model: true = answer this request with a tool-call parse error
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -136,10 +136,13 @@ before(async () => {
       return reply(recon("drip final answer"));
     }
     if (body.model === "gate-model") { // one at a time, please
+      const user = body.messages.find((m) => m.role === "user").content;
+      const isReview = user.includes("Review this change");
+      gateOrder.push(isReview ? "review" : (user.match(/\bq-\w+/) || ["?"])[0]);
       gateMax = Math.max(gateMax, ++gateInflight);
       await sleep(600);
       gateInflight--;
-      return reply(recon("gate answer"));
+      return reply(isReview ? JSON.stringify({ summary: "gate review", findings: [] }) : recon("gate answer"));
     }
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ message: ollamaReply(body) }));
@@ -170,6 +173,7 @@ before(async () => {
       drip: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "drip-model", timeoutMs: 6000 },
       gate: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "gate-model", timeoutMs: 1000 },
       gateq: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "gate-model", timeoutMs: 1000, queueWaitMs: 200 },
+      gateage: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "gate-model", timeoutMs: 1000, reconYieldMs: 100 },
       redirectq: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "redirect-model", queueWaitMs: 300 },
       emptythink: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "emptythink-model", maxTurns: 2 },
       emptythinkoff: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "emptythink-model", maxTurns: 2, thinkOnFinal: false },
@@ -529,6 +533,16 @@ test("instructions cover the size gate and repo policy", async () => {
   await c.close();
 });
 
+test("instructions explain the shared queue and when to use a background subagent", async () => {
+  const c = await connect();
+  const i = (c.getInstructions() || "").replace(/\s+/g, " ");
+  assert.match(i, /shared by every Claude session on this machine/);
+  assert.match(i, /Calls sent in parallel don't finish sooner/);
+  assert.match(i, /background subagent/);
+  assert.match(i, /Call crew_review_diff directly/);
+  await c.close();
+});
+
 /* ---------- v0.1.4: reliability ---------- */
 
 test("exploration turns send think:false + num_predict 2048; the final turn allows thinking + 8192", async () => {
@@ -669,6 +683,64 @@ test("a call already running holds the worker even when its ticket sorts after a
   assert.match(r.content[0].text, /holding it: crew_review_diff for other-repo/);
   fs.rmSync(late);
   assert.match(await call(c, "crew_recon", { question: "b" }), /gate answer/);
+  assert.deepEqual(tickets(), []);
+});
+
+test("a diff review goes ahead of a recon that is waiting, in the same session", async () => {
+  const c = await connect({ CREW_SCOUT: "gate" });
+  gateOrder = [];
+  const notes = [];
+  const a = call(c, "crew_recon", { question: "q-alpha" });
+  await sleep(100);
+  const b = c.callTool({ name: "crew_recon", arguments: { question: "q-beta" } }, undefined, { onprogress: (p) => notes.push(p.message) });
+  await sleep(150);
+  const r = call(c, "crew_review_diff", {});
+  await Promise.all([a, b, r]);
+  assert.deepEqual(gateOrder, ["q-alpha", "review", "q-beta"]);
+  assert.ok(notes.some((m) => m?.includes("reviews go first until it has waited 3m00s")), notes.join(" | "));
+});
+
+test("a diff review from one session goes ahead of a recon waiting in another, and the running recon is not interrupted", async () => {
+  const s1 = await connect({ CREW_SCOUT: "gate" });
+  const s2 = await connect({ CREW_SCOUT: "gate" });
+  gateOrder = [];
+  gateMax = 0;
+  const a = call(s1, "crew_recon", { question: "q-alpha" });
+  await sleep(150);
+  const b = call(s2, "crew_recon", { question: "q-beta" });
+  await sleep(150);
+  const r = call(s1, "crew_review_diff", {});
+  const out = await Promise.all([a, b, r]);
+  assert.match(out[0], /gate answer/);
+  assert.match(out[2], /gate review/);
+  assert.deepEqual(gateOrder, ["q-alpha", "review", "q-beta"]);
+  assert.equal(gateMax, 1);
+  assert.deepEqual(tickets(), []);
+});
+
+test("a recon that has waited reconYieldMs is passed by no one", async () => {
+  const c = await connect({ CREW_SCOUT: "gateage" }); // recons yield for 100ms only
+  gateOrder = [];
+  const a = call(c, "crew_recon", { question: "q-alpha" });
+  await sleep(100);
+  const b = call(c, "crew_recon", { question: "q-beta" });
+  await sleep(250); // q-beta has waited past its 100ms by now
+  const r = call(c, "crew_review_diff", {});
+  await Promise.all([a, b, r]);
+  assert.deepEqual(gateOrder, ["q-alpha", "q-beta", "review"]);
+});
+
+test("a recon that has stopped yielding keeps its place when its session takes a new ticket", async () => {
+  const s1 = await connect({ CREW_SCOUT: "gateage" }); // recons yield for 100ms only
+  const s2 = await connect({ CREW_SCOUT: "gateage" });
+  gateOrder = [];
+  const a = call(s1, "crew_recon", { question: "q-alpha" });
+  await sleep(100);
+  const b = call(s1, "crew_recon", { question: "q-beta" }); // waits in s1 behind q-alpha; stops yielding at ~200ms
+  await sleep(300);
+  const r = call(s2, "crew_review_diff", {}); // arrives after q-beta stopped yielding, before s1 re-takes its ticket
+  await Promise.all([a, b, r]);
+  assert.deepEqual(gateOrder, ["q-alpha", "q-beta", "review"]);
   assert.deepEqual(tickets(), []);
 });
 

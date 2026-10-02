@@ -17,7 +17,14 @@ All notable changes to crew-mcp are recorded here. The format follows
   wait. The busy error and `crew_status` show the same, and the error tells Claude not to
   resend the call right away or in parallel.
 - The instructions sent to Claude say the local GPU runs one call at a time for every session,
-  so parallel calls queue instead of finishing sooner.
+  so parallel calls queue instead of finishing sooner. They also say to hand a recon that isn't
+  needed right away to a background subagent, so the session keeps working while it queues.
+
+### Added
+- Reviews go ahead of recons in the local queue. Every other call goes ahead of a waiting
+  `crew_recon`, within a session and across sessions, until that recon has waited
+  `reconYieldMs` (new, default 3 min); after that nothing passes it. Started calls are never
+  interrupted.
 
 ## [0.2.1] - 2026-10-02
 

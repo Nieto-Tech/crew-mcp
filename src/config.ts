@@ -17,6 +17,8 @@ export interface WorkerConfig {
   timeoutMs?: number;
   /** Local workers: max time a call waits in the queue for the worker, shared by every crew session on the machine (default 600000). */
   queueWaitMs?: number;
+  /** Local workers: how long a waiting crew_recon lets other calls go ahead of it in the queue (default 180000). */
+  reconYieldMs?: number;
   /** Total characters of tool output the model may read per task. Defaults from numCtx. */
   readBudgetChars?: number;
   maxTurns?: number;
@@ -156,5 +158,6 @@ export function budgetsFor(w: WorkerConfig) {
     maxTurns: w.maxTurns ?? 16,
     timeoutMs: w.timeoutMs ?? 300_000,
     queueWaitMs: w.queueWaitMs ?? 600_000,
+    reconYieldMs: w.reconYieldMs ?? 180_000,
   };
 }

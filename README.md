@@ -266,7 +266,15 @@ narrow with `paths` or raise `timeoutMs` for that worker in `~/.config/crew/conf
   progress notes naming the call holding the worker (tool and repo directory name) and an
   estimated wait based on past call times in the usage log. `crew_status` shows the same.
   A call waits at most `queueWaitMs` (default 10 min, per worker), then fails with the same
-  details. If the state directory can't be written, crew falls back to queueing within the
+  details.
+- **Reviews go ahead of recons.** A recon is exploration and can usually wait; a diff review
+  is what stands between Claude and "done". So every other call goes ahead of a waiting
+  `crew_recon`, in the same session or another, until that recon has waited `reconYieldMs`
+  (default 3 min, per worker); after that nothing passes it. A call that has started is never
+  interrupted. The recon's progress notes say when later calls went ahead of it.
+- **Long recons in the background.** A crew call blocks Claude's turn, queue time included.
+  The usage guidance tells Claude to hand a recon it doesn't need right away to a background
+  subagent and keep working. If the state directory can't be written, crew falls back to queueing within the
   session only.
 - **Model names.** Ollama tags match case-insensitively (`Q4_K_M` vs `q4_K_M`); a model that
   isn't installed gets a list of the closest installed names.

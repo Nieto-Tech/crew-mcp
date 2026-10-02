@@ -26,6 +26,10 @@ your own context and to get independent checks. Claude stays the lead.
   sooner, they queue: send one call with a broader question rather than several narrow
   ones at once. A queued call can take several minutes; that's the queue, not a hang.
   If one fails because the worker is busy, don't resend it straight away.
+- A crew call blocks your turn until it returns, queue time included. When a recon
+  isn't needed for your very next step, hand it to a background subagent and keep
+  working; use its result when it arrives. Call crew_review_diff directly: it gates
+  "done", and the queue lets it go ahead of waiting recons.
 - When reporting crew results, keep three things distinct: what the crew claimed,
   what you verified yourself, and what is still unverified.
 - Every crew result starts with a "_via ..._" line naming the worker, model, time and
