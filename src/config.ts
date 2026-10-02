@@ -15,7 +15,7 @@ export interface WorkerConfig {
   /** ollama: context window requested on every call */
   numCtx?: number;
   timeoutMs?: number;
-  /** Local workers: max time a call waits in the queue for the worker before failing fast (default 60000). */
+  /** Local workers: max time a call waits in the queue for the worker, shared by every crew session on the machine (default 600000). */
   queueWaitMs?: number;
   /** Total characters of tool output the model may read per task. Defaults from numCtx. */
   readBudgetChars?: number;
@@ -155,6 +155,6 @@ export function budgetsFor(w: WorkerConfig) {
     perRead: Math.max(4_000, Math.min(16_000, Math.round(readBudget / 6))),
     maxTurns: w.maxTurns ?? 16,
     timeoutMs: w.timeoutMs ?? 300_000,
-    queueWaitMs: w.queueWaitMs ?? 60_000,
+    queueWaitMs: w.queueWaitMs ?? 600_000,
   };
 }

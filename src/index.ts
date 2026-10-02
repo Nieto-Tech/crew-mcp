@@ -4,7 +4,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import path from "node:path";
 import { z } from "zod";
 import { budgetsFor, loadConfig, userConfigPath } from "./config.js";
-import { checkWorker, laneStatus, resolveRole, runTask, type TaskResult } from "./workers.js";
+import { checkWorker, resolveRole, runTask, type TaskResult } from "./workers.js";
+import { queueLine } from "./lane.js";
 import { Workspace } from "./workspace.js";
 import { checkCitations, extractJson, verifyFindings, type Finding } from "./checks.js";
 import { RECON_SCHEMA, REVIEW_SCHEMA, SYSTEM, codeMapBlock, reconPrompt, reviewPrompt, secondOpinionPrompt } from "./prompts.js";
@@ -139,11 +140,10 @@ server.registerTool(
         }
         const a = await checkWorker(name, w);
         const b = budgetsFor(w);
-        const q = laneStatus(w);
         lines.push(
           `- ${a.ok ? "✅" : "❌"} **${name}** (${w.provider}): ${a.detail}` +
             (w.provider !== "codex-cli" ? ` · read budget ${Math.round(b.readBudget / 1000)}K chars, ${b.maxTurns} turns` : "") +
-            (q.running || q.waiting ? ` · queue: ${q.running} running, ${q.waiting} queued` : "")
+            (w.provider !== "codex-cli" && isLocalWorker(w) ? queueLine(w, name) : "")
         );
       }
       if (excluded.length) lines.push("", `Policy excluded: ${excluded.join(", ")}. Nothing is sent to them and they are never a fallback.`);

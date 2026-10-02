@@ -21,6 +21,11 @@ your own context and to get independent checks. Claude stays the lead.
   and fix anything invalid.
 - Crew calls can take 1-2 minutes. That's expected; don't retry or poll. If a crew
   tool errors, run crew_status once and report what it says.
+- The local GPU runs one crew call at a time, shared by every Claude session on this
+  machine; other calls wait their turn in a queue. Calls sent in parallel don't finish
+  sooner, they queue: send one call with a broader question rather than several narrow
+  ones at once. A queued call can take several minutes; that's the queue, not a hang.
+  If one fails because the worker is busy, don't resend it straight away.
 - When reporting crew results, keep three things distinct: what the crew claimed,
   what you verified yourself, and what is still unverified.
 - Every crew result starts with a "_via ..._" line naming the worker, model, time and

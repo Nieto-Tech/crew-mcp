@@ -255,11 +255,19 @@ narrow with `paths` or raise `timeoutMs` for that worker in `~/.config/crew/conf
 - **Malformed tool calls.** When Ollama can't parse the model's tool call (HTTP 500), the
   turn is redone with a nudge to use valid tool-call syntax, up to 2 times per task. A third
   malformed call fails the task.
-- **One request at a time per local worker.** Later calls queue, and the timeout clock
-  starts when the call gets the worker, not when it queued. Workers that share a server
-  share a queue. `crew_status` shows queue depth when there is one. A call waits at most
-  `queueWaitMs` (default 60s, per worker) and then fails fast, naming the worker, the queue
-  depth and how long the current call has held it.
+- **One request at a time per local worker, across every session.** Each Claude Code session
+  starts its own crew server, so crew queues through ticket files in
+  `$XDG_STATE_HOME/crew/lanes/` (default `~/.local/state/crew/lanes/`): every crew process on
+  the machine shares one queue per local server. Sessions take turns: a session's next call
+  goes behind calls other sessions already have waiting. The timeout clock starts when the
+  call gets the worker, not when it queued. Workers that share a server share a queue. A
+  ticket whose process has exited, or whose heartbeat stopped for 30s, is cleared by the next
+  process that looks, so a crashed session can't wedge the queue. While a call waits, it sends
+  progress notes naming the call holding the worker (tool and repo directory name) and an
+  estimated wait based on past call times in the usage log. `crew_status` shows the same.
+  A call waits at most `queueWaitMs` (default 10 min, per worker), then fails with the same
+  details. If the state directory can't be written, crew falls back to queueing within the
+  session only.
 - **Model names.** Ollama tags match case-insensitively (`Q4_K_M` vs `q4_K_M`); a model that
   isn't installed gets a list of the closest installed names.
 - **Diagnostics.** Each turn logs to stderr: turn number, tool calls, prompt size, seconds

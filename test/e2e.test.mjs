@@ -6,7 +6,7 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -579,6 +579,7 @@ test("two concurrent calls to one local worker run one at a time, and the clock 
   await sleep(250);
   const status = await call(c, "crew_status", {});
   assert.match(status, /\*\*gate\*\*.*queue: 1 running, 1 queued/);
+  assert.match(status, /queue: 1 running, 1 queued \(now: crew_recon for this session, [\d.]+s so far; clear in .*, est\.\)/);
   const [x, y] = await both; // queueing 600ms + running 600ms would blow a 1s clock if it started at call time
   assert.match(x, /gate answer/);
   assert.match(y, /gate answer/);
@@ -595,7 +596,8 @@ test("a call that waits longer than queueWaitMs fails fast with a clear message,
   const t0 = Date.now();
   const second = await c.callTool({ name: "crew_recon", arguments: { question: "b" } });
   assert.equal(second.isError, true);
-  assert.match(second.content[0].text, /"gateq" is busy: gave up after waiting 0s in the queue \(1 waiting including this call; the current call has held the worker for \d+s\)/);
+  assert.match(second.content[0].text, /"gateq" is busy: gave up after waiting 0\.2s in the queue \(holding it: crew_recon for this session, [\d.]+s so far; 0 other call\(s\) waiting\)/);
+  assert.match(second.content[0].text, /only queues it again/);
   assert.ok(Date.now() - t0 < 500, "failed fast, did not wait for the holder");
   assert.ok(!(await first).isError);
   assert.match(await call(c, "crew_recon", { question: "c" }), /gate answer/); // lane still usable
@@ -612,6 +614,62 @@ test("the lane is released when a call throws", async () => {
   }
   assert.doesNotMatch(await call(c, "crew_status", {}), /queue: [1-9]/);
   await c.close();
+});
+
+const laneDirFor = () => path.join(process.env.XDG_STATE_HOME, "crew", "lanes", `ollama_http_127.0.0.1_${port}`);
+const tickets = () => (fs.existsSync(laneDirFor()) ? fs.readdirSync(laneDirFor()).filter((n) => n.endsWith(".json")) : []);
+
+test("two sessions share one local worker: their calls run one at a time, and the waiter is told who holds it", async () => {
+  const a = await connect({ CREW_SCOUT: "gate" }); // separate server processes, like two Claude Code sessions
+  const b = await connect({ CREW_SCOUT: "gate" });
+  gateMax = 0;
+  const notes = [];
+  const first = call(a, "crew_recon", { question: "a" });
+  await sleep(150);
+  const second = b.callTool({ name: "crew_recon", arguments: { question: "b" } }, undefined, { onprogress: (p) => notes.push(p.message) });
+  await sleep(150);
+  const status = await call(b, "crew_status", {});
+  assert.match(status, new RegExp(`queue: 1 running, 1 queued \\(now: crew_recon for ${path.basename(repo)}, `));
+  assert.match(await first, /gate answer/);
+  const r = await second;
+  assert.ok(!r.isError, r.content[0].text);
+  assert.match(r.content[0].text, /gate answer/);
+  assert.match(r.content[0].text, /queued 0\.\ds/);
+  assert.equal(gateMax, 1, "never two in flight across sessions");
+  assert.ok(notes.some((m) => m && m.includes(`is busy (crew_recon for ${path.basename(repo)}`)), notes.join(" | "));
+  assert.deepEqual(tickets(), [], "tickets are removed when calls finish");
+});
+
+test("a ticket left by a dead session, or one whose heartbeat stopped, does not block the lane", async () => {
+  fs.mkdirSync(laneDirFor(), { recursive: true });
+  const dead = spawnSync(process.execPath, ["-e", ""]).pid; // a process that has exited
+  const old = String(Date.now() - 120_000).padStart(15, "0");
+  const ticket = (name, pid) => fs.writeFileSync(path.join(laneDirFor(), name), JSON.stringify({ pid, host: os.hostname(), workspace: "ghost", tool: "crew_recon", queuedAt: Date.now() }));
+  ticket(`${old}-${dead}-0.json`, dead);
+  const stuck = `${old}-${process.pid}-0.json`; // alive, but its heartbeat stopped two minutes ago
+  ticket(stuck, process.pid);
+  const then = new Date(Date.now() - 120_000);
+  fs.utimesSync(path.join(laneDirFor(), stuck), then, then);
+  const c = await connect({ CREW_SCOUT: "gateq" }); // gives up after 200ms if it has to wait
+  const out = await call(c, "crew_recon", { question: "a" });
+  assert.match(out, /gate answer/);
+  assert.deepEqual(tickets(), []);
+});
+
+test("a call already running holds the worker even when its ticket sorts after a newer one", async () => {
+  fs.mkdirSync(laneDirFor(), { recursive: true });
+  // Named a minute in the future, so any new ticket sorts first; but it has started, and its process is alive.
+  const late = path.join(laneDirFor(), `${String(Date.now() + 60_000).padStart(15, "0")}-${process.pid}-9.json`);
+  fs.writeFileSync(late, JSON.stringify({ pid: process.pid, host: os.hostname(), workspace: "other-repo", tool: "crew_review_diff", queuedAt: Date.now(), startedAt: Date.now() }));
+  const c = await connect({ CREW_SCOUT: "gateq" }); // gives up after 200ms
+  const notes = [];
+  const r = await c.callTool({ name: "crew_recon", arguments: { question: "a" } }, undefined, { onprogress: (p) => notes.push(p.message) });
+  assert.equal(r.isError, true);
+  assert.ok(notes.some((m) => m?.includes("is busy (crew_review_diff for other-repo")), notes.join(" | "));
+  assert.match(r.content[0].text, /holding it: crew_review_diff for other-repo/);
+  fs.rmSync(late);
+  assert.match(await call(c, "crew_recon", { question: "b" }), /gate answer/);
+  assert.deepEqual(tickets(), []);
 });
 
 /* ---------- v0.1.4: policy hardening ---------- */
