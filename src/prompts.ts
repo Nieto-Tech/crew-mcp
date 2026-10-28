@@ -33,7 +33,7 @@ export const REVIEW_SCHEMA = `{
   "findings": [
     {
       "severity": "critical|high|medium|low",
-      "category": "bug|security|concurrency|data-integrity|error-handling|tests|performance",
+      "category": "bug|security|concurrency|data-integrity|error-handling|tests|performance|duplication|stale-comment",
       "file": "relative/path",
       "line": 123,
       "claim": "what is wrong and why it matters",
@@ -58,7 +58,7 @@ ${RECON_SCHEMA}`;
 
 export const reviewPrompt = (diff: string, focus: string, truncatedNote: string, codeMap = "") => `Review this change for the lead engineer. The diff is working-tree changes
 (staged, unstaged, and new files).
-${focus ? `\nFocus especially on: ${focus}\n` : ""}${codeMap}
+${focus ? `\nFocus especially on: ${focus}\nSpend most of your reads there. In "summary", say what you checked in that area and whether it came up clean.\n` : ""}${codeMap}
 ===== DIFF =====
 ${diff}
 ===== END DIFF =====
@@ -70,6 +70,13 @@ Report only real defects or risks that this change introduces or leaves exposed:
 bugs, security, concurrency, data integrity, error handling, missing tests for
 risky logic. Skip style nits. Prefer a few solid findings over many weak ones.
 An empty list is a fine answer.
+- If the diff adds a helper, query or lookup, search the repo once for an existing
+  one that already does the job. A new copy of existing logic is a finding
+  (category "duplication"; quote the new code, name the existing helper in "claim").
+- A comment or doc the change made wrong (it no longer matches the code beside it)
+  is worth reporting: category "stale-comment", severity "low".
+- Report missing tests only if this part of the repo already has a test setup
+  (a test script, test files nearby). Otherwise don't.
 
 Every finding MUST include "line" (where the problem is) and "evidence": an EXACT
 quote copied character-for-character from the current file at that line, or from the diff (one line or a short snippet, WITHOUT the "+"/"-"

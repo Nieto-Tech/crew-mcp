@@ -6,6 +6,19 @@ All notable changes to crew-mcp are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `crew_review_diff` findings and `crew_recon` risks that pass the quote check are shown at the
+  line where their quote really is.
+  Models often cite a line 10-20 off; the note used to say so while the headline
+  `file:line` still pointed at the wrong place. The note keeps the cited line.
+- Review findings are listed most severe first. A finding whose quote is only a comment is
+  capped at low, and so is a `tests` finding when no `package.json` above the file has a
+  test script.
+- The review prompt asks the scout to search for an existing helper when the diff adds
+  one (category `duplication`), to report comments the change made wrong (category
+  `stale-comment`, low), and to skip missing tests where the code has no test setup. With
+  `focus`, the summary says what was checked in that area and whether it came up clean.
+
 ## [0.3.0] - 2026-10-02
 
 ### Changed
