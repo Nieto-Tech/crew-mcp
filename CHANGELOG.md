@@ -26,6 +26,11 @@ All notable changes to crew-mcp are recorded here. The format follows
   lines of one is collapsed into an *Already acknowledged* section instead of repeated in
   full. The instructions sent on connect tell Claude to use it on re-runs.
 
+### Fixed
+- In a workspace that isn't a git repo, on Windows, files were listed with backslashes, so
+  model-written paths and citations never matched them ("file not found in workspace").
+  They are now listed with forward slashes, as in a git workspace.
+
 ## [0.3.0] - 2026-10-02
 
 ### Changed

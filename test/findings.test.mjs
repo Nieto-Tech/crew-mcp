@@ -112,6 +112,12 @@ test("bySeverity: most severe first, ties keep their order, unknown last", () =>
   assert.deepEqual(out.map((x) => x.claim), ["e", "c", "a", "d", "b"]);
 });
 
+test("listFiles outside git uses forward slashes on every platform", async () => {
+  const files = await ws.listFiles();
+  assert.ok(files.includes("backend/src/job.ts"), files.join(", "));
+  assert.ok(!files.some((f) => f.includes("\\")), files.join(", "));
+});
+
 test("parseAck: a leading file:line (backticked or not) is parsed; free text is not", () => {
   assert.deepEqual(parseAck("backend/src/job.ts:110 fan-out not transactional: deliberate"), { file: "backend/src/job.ts", line: 110 });
   assert.deepEqual(parseAck("`job.ts:7`: by design"), { file: "job.ts", line: 7 });
