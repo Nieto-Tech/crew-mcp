@@ -535,6 +535,26 @@ test("a worker timeout names the worker, the time, and the fix", async () => {
   await c.close();
 });
 
+test("diff review: acknowledged findings reach the prompt and come back collapsed", async () => {
+  const c = await connect();
+  requests = [];
+  const out = await call(c, "crew_review_diff", { acknowledged: ["src/pay.ts:36 refund cap: refunds are approved upstream", "nothing else to add"] });
+  const prompt = requests[0].messages.find((m) => m.role === "user").content;
+  assert.match(prompt, /already weighed these[\s\S]*- src\/pay\.ts:36 refund cap: refunds are approved upstream\n- nothing else to add/);
+  assert.match(out, /Quote-checked findings \(0\)/);
+  assert.match(out, /Already acknowledged \(1\)[\s\S]*`src\/pay\.ts:38`: refund does not check the amount[^\n]*quote-checked; matches "src\/pay\.ts:36 refund cap/);
+  assert.match(out, /Unverified \(2\)/, "findings elsewhere are untouched");
+  const ghost = await call(c, "crew_review_diff", { acknowledged: ["src/ghost.ts:3 gone"] });
+  assert.match(ghost, /1 acknowledged entry names a file not found in the workspace, so only the prompt saw it: "src\/ghost\.ts:3 gone"/);
+  await c.close();
+});
+
+test("instructions say to pass rebutted findings as acknowledged", async () => {
+  const c = await connect();
+  assert.match(c.getInstructions() || "", /pass the ones you\s+rebutted or accepted as `acknowledged`/);
+  await c.close();
+});
+
 test("instructions cover the size gate and repo policy", async () => {
   const c = await connect();
   const i = c.getInstructions() || "";

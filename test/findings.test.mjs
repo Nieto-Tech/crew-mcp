@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { bySeverity, isCommentOnly, locateQuote, triageFindings, verifyFindings } from "../dist/checks.js";
+import { bySeverity, isCommentOnly, locateQuote, parseAck, splitAcknowledged, triageFindings, verifyFindings } from "../dist/checks.js";
 import { Workspace } from "../dist/workspace.js";
 
 let ws;
@@ -116,4 +116,24 @@ test("listFiles outside git uses forward slashes on every platform", async () =>
   const files = await ws.listFiles();
   assert.ok(files.includes("backend/src/job.ts"), files.join(", "));
   assert.ok(!files.some((f) => f.includes("\\")), files.join(", "));
+});
+
+test("parseAck: a leading file:line (backticked or not) is parsed; free text is not", () => {
+  assert.deepEqual(parseAck("backend/src/job.ts:110 fan-out not transactional: deliberate"), { file: "backend/src/job.ts", line: 110 });
+  assert.deepEqual(parseAck("`job.ts:7`: by design"), { file: "job.ts", line: 7 });
+  assert.equal(parseAck("the tests finding: no runner here"), null);
+  assert.equal(parseAck("see backend/src/job.ts:110"), null, "only a leading file:line counts");
+  assert.equal(parseAck("job.ts:0 x"), null);
+});
+
+test("splitAcknowledged: same file within the window is acknowledged; elsewhere stays new", async () => {
+  const at = (line, file = "backend/src/job.ts") => ({ verified: true, why: "w", claim: `c${line}`, resolvedFile: file, line });
+  const findings = [at(30), at(40), at(20, "web/src/view.ts"), { ...at(0), line: undefined }];
+  const { fresh, acked } = await splitAcknowledged(ws, findings, ["job.ts:31 window end: accepted", "the tests one is noise"]);
+  assert.deepEqual(acked.map((a) => [a.finding.claim, a.entry]), [["c30", "job.ts:31 window end: accepted"]], "a shortened path resolves");
+  assert.deepEqual(fresh.map((f) => f.claim), ["c40", "c20", "c0"], "other lines, other files, and no line stay new");
+  const ghost = await splitAcknowledged(ws, findings, ["src/ghost.ts:30 gone", "job.ts:31 x"]);
+  assert.deepEqual(ghost.unplaced, ["src/ghost.ts:30 gone"], "a file:line naming no file is reported, not silently ignored");
+  const none = await splitAcknowledged(ws, findings, []);
+  assert.equal(none.fresh.length, 4);
 });

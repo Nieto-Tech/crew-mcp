@@ -56,9 +56,13 @@ Your final answer must be a single JSON object and nothing else:
 
 ${RECON_SCHEMA}`;
 
-export const reviewPrompt = (diff: string, focus: string, truncatedNote: string, codeMap = "") => `Review this change for the lead engineer. The diff is working-tree changes
+export const reviewPrompt = (diff: string, focus: string, truncatedNote: string, codeMap = "", acknowledged: string[] = []) => `Review this change for the lead engineer. The diff is working-tree changes
 (staged, unstaged, and new files).
-${focus ? `\nFocus especially on: ${focus}\nSpend most of your reads there. In "summary", say what you checked in that area and whether it came up clean.\n` : ""}${codeMap}
+${focus ? `\nFocus especially on: ${focus}\nSpend most of your reads there. In "summary", say what you checked in that area and whether it came up clean.\n` : ""}${
+  acknowledged.length
+    ? `\nThe lead has already weighed these (fixed, rebutted, or accepted as deliberate). Don't report them\nagain unless this change made them worse or you found something new about them:\n${acknowledged.map((a) => `- ${a}`).join("\n")}\n`
+    : ""
+}${codeMap}
 ===== DIFF =====
 ${diff}
 ===== END DIFF =====

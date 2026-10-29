@@ -7,7 +7,7 @@ import { budgetsFor, loadConfig, userConfigPath } from "./config.js";
 import { checkWorker, resolveRole, runTask, type TaskResult } from "./workers.js";
 import { queueLine } from "./lane.js";
 import { Workspace } from "./workspace.js";
-import { bySeverity, checkCitations, extractJson, triageFindings, verifyFindings, type Finding } from "./checks.js";
+import { bySeverity, checkCitations, extractJson, splitAcknowledged, triageFindings, verifyFindings, type Finding } from "./checks.js";
 import { RECON_SCHEMA, REVIEW_SCHEMA, SYSTEM, codeMapBlock, reconPrompt, reviewPrompt, secondOpinionPrompt } from "./prompts.js";
 import { log } from "./log.js";
 import { describePolicy, isLocalWorker, loadPolicy, POLICY_FILE } from "./policy.js";
@@ -263,6 +263,13 @@ server.registerTool(
       base: z.string().optional().describe("Git ref to diff against (default HEAD). Use e.g. 'main' for a whole branch."),
       paths: z.array(z.string()).optional().describe("Limit the review to these paths"),
       focus: z.string().optional().describe("What to look at hardest, e.g. 'transaction boundaries'"),
+      acknowledged: z
+        .array(z.string().max(300))
+        .max(30)
+        .optional()
+        .describe(
+          "Findings from an earlier run you already fixed, rebutted or accepted, so they aren't raised again. Start each with the finding's headline file:line, then a few words, e.g. 'src/jobs/sync.ts:110 fan-out not transactional: deliberate'. Matching findings within a few lines are collapsed to one line."
+        ),
       includeUntracked: z
         .boolean()
         .optional()
@@ -275,7 +282,7 @@ server.registerTool(
     },
     annotations: { readOnlyHint: true },
   },
-  async ({ base, paths, focus, includeUntracked, force, workspace }, extra) => {
+  async ({ base, paths, focus, acknowledged, includeUntracked, force, workspace }, extra) => {
     try {
       const { config } = loadConfig();
       const ws = await openWorkspace(workspace);
@@ -299,7 +306,7 @@ server.registerTool(
         tool: "crew_review_diff",
         ws,
         system: SYSTEM(ws.root),
-        prompt: reviewPrompt(clipped, focus || "", note, codeMapBlock(map?.file || "", map?.text || "")),
+        prompt: reviewPrompt(clipped, focus || "", note, codeMapBlock(map?.file || "", map?.text || ""), acknowledged || []),
         answer: { schema: REVIEW_SCHEMA, isValid: isReview },
         onProgress: progressFor(extra as Extra),
       });
@@ -310,7 +317,8 @@ server.registerTool(
         return text(`${via(r)}\n\nScout did not return structured output. Raw answer:\n\n${r.text}`);
       }
 
-      const checked = bySeverity(await triageFindings(ws, await verifyFindings(ws, parsed.findings || [], diff)));
+      const all = bySeverity(await triageFindings(ws, await verifyFindings(ws, parsed.findings || [], diff)));
+      const { fresh: checked, acked, unplaced } = await splitAcknowledged(ws, all, acknowledged || []);
       const verified = checked.filter((f) => f.verified);
       const unverified = checked.filter((f) => !f.verified);
       logCall(r, "crew_review_diff", ws, r.partial ? "partial" : "ok", { quoteChecked: verified.length, unverified: unverified.length });
@@ -335,6 +343,18 @@ server.registerTool(
       ];
       if (unverified.length) {
         out.push("", `## Unverified (${unverified.length}): the quoted code wasn't found, treat as hints`, ...unverified.map(fmt));
+      }
+      if (acked.length) {
+        const short = (s: string) => (s.length > 80 ? s.slice(0, 77) + "..." : s);
+        out.push(
+          "",
+          `## Already acknowledged (${acked.length}): near a file:line you passed in \`acknowledged\``,
+          "_Check the claim is the same one; a different problem on a nearby line would also land here._",
+          ...acked.map(({ finding: f, entry }) => `- \`${f.resolvedFile || f.file || "?"}${f.line ? `:${f.line}` : ""}\`: ${f.claim} _(${f.verified ? "quote-checked" : "unverified"}; matches "${short(entry)}")_`)
+        );
+      }
+      if (unplaced.length) {
+        out.push("", `_${unplaced.length} acknowledged entr${unplaced.length === 1 ? "y names a file" : "ies name files"} not found in the workspace, so only the prompt saw ${unplaced.length === 1 ? "it" : "them"}: ${unplaced.map((u) => `"${u.length > 60 ? u.slice(0, 57) + "..." : u}"`).join(", ")}_`);
       }
       return text(out.join("\n"));
     } catch (e) {

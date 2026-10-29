@@ -413,6 +413,46 @@ export async function triageFindings(ws: Workspace, checked: CheckedFinding[]): 
   return out;
 }
 
+/* ---------- Findings the lead already weighed ---------- */
+
+/** The `file:line` an acknowledged entry starts with (the headline of an earlier finding), or null for free text. */
+export function parseAck(entry: string): { file: string; line: number } | null {
+  const m = String(entry).match(/^\s*`?([\w@.-]+(?:[\\/][\w@.-]+)*\.[A-Za-z]{1,8}):(\d+)/);
+  return m && Number(m[2]) > 0 ? { file: m[1], line: Number(m[2]) } : null;
+}
+
+/**
+ * Split findings into new ones and ones matching an acknowledged entry: same file, line within the
+ * quote gate's window. Lines shift a little when the lead edits between runs; a finding further off is
+ * kept as new. Free-text entries only reach the prompt. Matched findings are shown collapsed, not dropped.
+ * `unplaced` lists entries whose file:line names no file in the workspace, so the caller can say so.
+ */
+export async function splitAcknowledged<T extends CheckedFinding>(
+  ws: Workspace,
+  findings: T[],
+  acknowledged: string[]
+): Promise<{ fresh: T[]; acked: { finding: T; entry: string }[]; unplaced: string[] }> {
+  const files = await ws.listFiles();
+  const acks: { file: string; line: number; entry: string }[] = [];
+  const unplaced: string[] = [];
+  for (const entry of acknowledged) {
+    const a = parseAck(entry);
+    if (!a) continue;
+    const r = await resolveCited(ws, files, a.file, { start: a.line });
+    if (r.file) acks.push({ file: r.file, line: a.line, entry });
+    else unplaced.push(entry);
+  }
+  const fresh: T[] = [];
+  const acked: { finding: T; entry: string }[] = [];
+  for (const f of findings) {
+    const at = typeof f.line === "number" ? f.line : 0;
+    const hit = at && f.resolvedFile ? acks.find((a) => a.file === f.resolvedFile && Math.abs(a.line - at) <= ANCHOR_WINDOW) : undefined;
+    if (hit) acked.push({ finding: f, entry: hit.entry });
+    else fresh.push(f);
+  }
+  return { fresh, acked, unplaced };
+}
+
 const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
 
 /** Most severe first; findings of equal severity keep the model's order. */
