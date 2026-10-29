@@ -7,7 +7,7 @@ import { budgetsFor, loadConfig, userConfigPath } from "./config.js";
 import { checkWorker, resolveRole, runTask, type TaskResult } from "./workers.js";
 import { queueLine } from "./lane.js";
 import { Workspace } from "./workspace.js";
-import { checkCitations, extractJson, verifyFindings, type Finding } from "./checks.js";
+import { bySeverity, checkCitations, extractJson, triageFindings, verifyFindings, type Finding } from "./checks.js";
 import { RECON_SCHEMA, REVIEW_SCHEMA, SYSTEM, codeMapBlock, reconPrompt, reviewPrompt, secondOpinionPrompt } from "./prompts.js";
 import { log } from "./log.js";
 import { describePolicy, isLocalWorker, loadPolicy, POLICY_FILE } from "./policy.js";
@@ -310,7 +310,7 @@ server.registerTool(
         return text(`${via(r)}\n\nScout did not return structured output. Raw answer:\n\n${r.text}`);
       }
 
-      const checked = await verifyFindings(ws, parsed.findings || [], diff);
+      const checked = bySeverity(await triageFindings(ws, await verifyFindings(ws, parsed.findings || [], diff)));
       const verified = checked.filter((f) => f.verified);
       const unverified = checked.filter((f) => !f.verified);
       logCall(r, "crew_review_diff", ws, r.partial ? "partial" : "ok", { quoteChecked: verified.length, unverified: unverified.length });

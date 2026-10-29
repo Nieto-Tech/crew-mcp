@@ -273,6 +273,17 @@ test("diff review separates evidence-checked findings from hallucinations", asyn
   await c.close();
 });
 
+test("diff review: focus asks for a report on the focus area; the prompt asks for duplicates and stale comments", async () => {
+  const c = await connect();
+  requests = [];
+  await call(c, "crew_review_diff", { focus: "refund limits" });
+  const prompt = requests[0].messages.find((m) => m.role === "user").content;
+  assert.match(prompt, /Focus especially on: refund limits\nSpend most of your reads there\. In "summary", say what you checked/);
+  assert.match(prompt, /search the repo once for an existing\s+one that already does the job/);
+  assert.match(prompt, /category "stale-comment", severity "low"/);
+  await c.close();
+});
+
 test("scout falls back to ChatGPT when the local model is unavailable", async () => {
   const c = await connect({ CREW_SCOUT: "nope,chatgpt" });
   const out = await call(c, "crew_recon", { question: "map charging" });

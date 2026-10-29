@@ -89,7 +89,8 @@ export class Workspace {
             if (WALK_SKIP.has(e.name)) return;
             const full = path.join(dir, e.name);
             if (e.isDirectory()) return walk(full);
-            if (e.isFile()) files.push(path.relative(this.root, full));
+            // Forward slashes, as git ls-files gives: path resolution and citation matching expect them.
+            if (e.isFile()) files.push(path.relative(this.root, full).split(path.sep).join("/"));
           })
         );
       };

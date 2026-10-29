@@ -328,6 +328,12 @@ claude mcp add --scope user crew -- crew-mcp
   file doesn't count. Everything else is *unverified* and shown as a hint.
   Quote-checked means the quoted code exists where claimed. **It doesn't mean the
   claim is right**, so Claude (and you) should still weigh the reasoning.
+  A quote-checked finding is shown at the line where its quote really is; when that
+  isn't the line the model cited, the note says so.
+- **Severity triage.** After the quote gate, a finding whose quote is only a comment
+  is capped at low (the fix is editing the comment), and a `tests` finding is capped
+  at low when no `package.json` above the file has a test script. Findings are
+  listed most severe first. Triage never changes whether a finding is quote-checked.
 - **Citations.** `file:line` and `file:start-end` references are resolved (shortened
   paths, build/worktree copies ignored, ties broken by context and line range), and
   the lines must exist. When a backticked identifier sits right next to a citation,

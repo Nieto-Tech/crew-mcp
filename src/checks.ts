@@ -240,7 +240,40 @@ const DISTINCTIVE_QUOTE_CHARS = 20;
 const ANCHOR_WINDOW = 8; // lines either side of the cited line
 
 const nonSpaceLen = (s: string) => s.replace(/\s/g, "").length;
-const occurrences = (hay: string, needle: string) => (needle ? hay.split(needle).length - 1 : 0);
+
+/**
+ * Every place a whitespace-normalized quote occurs in a file, as 1-based first and last lines.
+ * The file is normalized line by line, so each match maps back to the lines it spans.
+ */
+export function locateQuote(lines: string[], quote: string): { start: number; end: number }[] {
+  const starts: number[] = []; // offset in `body` where each line begins
+  const lineAt: number[] = []; // the line number for each entry in `starts`
+  let body = "";
+  lines.forEach((l, i) => {
+    const n = normalizeWs(l);
+    if (!n) return;
+    if (body) body += " ";
+    starts.push(body.length);
+    lineAt.push(i + 1);
+    body += n;
+  });
+  const lineOf = (off: number) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= off) lo = mid;
+      else hi = mid - 1;
+    }
+    return lineAt[lo];
+  };
+  const out: { start: number; end: number }[] = [];
+  if (!quote) return out;
+  for (let at = body.indexOf(quote); at !== -1; at = body.indexOf(quote, at + 1)) {
+    out.push({ start: lineOf(at), end: lineOf(at + quote.length - 1) });
+  }
+  return out;
+}
 
 /**
  * A finding passes only if its quote is real AND pinned down:
@@ -248,6 +281,8 @@ const occurrences = (hay: string, needle: string) => (needle ? hay.split(needle)
  * - found exactly once in the file and long enough to be distinctive.
  * A short, common quote like "throw err;" somewhere else in the file proves nothing.
  * Passing means the quoted code exists where claimed, NOT that the claim is right.
+ * A passing finding's `line` is moved to where the quote really is, so the headline
+ * `file:line` points at the code; `why` keeps the line the model cited.
  */
 export async function verifyFindings(ws: Workspace, findings: Finding[], diffText = ""): Promise<CheckedFinding[]> {
   const files = await ws.listFiles();
@@ -281,25 +316,28 @@ export async function verifyFindings(ws: Workspace, findings: Finding[], diffTex
 
     const raw = (await fs.readFile(await ws.resolve(r.file), "utf8")).split(/\r?\n/);
     const line = typeof f.line === "number" && f.line > 0 ? f.line : 0;
+    const hits = locateQuote(raw, ev);
     if (line) {
-      const lo = Math.max(0, line - 1 - ANCHOR_WINDOW);
-      const hi = Math.min(raw.length, line + ANCHOR_WINDOW);
-      if (normalizeWs(raw.slice(lo, hi).join("\n")).includes(ev)) {
-        out.push({ ...f, verified: true, resolvedFile: r.file, why: "quote found at cited line" });
+      // The whole quote must sit inside the window; of several that do, take the one nearest the cited line.
+      const near = hits
+        .filter((h) => h.start >= line - ANCHOR_WINDOW && h.end <= line + ANCHOR_WINDOW)
+        .sort((a, b) => Math.abs(a.start - line) - Math.abs(b.start - line))[0];
+      if (near) {
+        const why = near.start === line ? "quote found at cited line" : `quote found at line ${near.start}, near the cited line ${line}`;
+        out.push({ ...f, line: near.start, verified: true, resolvedFile: r.file, why });
         continue;
       }
     }
 
-    const body = normalizeWs(raw.join("\n"));
-    const n = occurrences(body, ev);
+    const n = hits.length;
     if (n === 1 && evLen >= DISTINCTIVE_QUOTE_CHARS) {
-      const firstLine = normalizeWs(evidence.split("\n")[0]);
-      const actual = raw.findIndex((l) => normalizeWs(l).includes(firstLine)) + 1;
+      const actual = hits[0].start;
       out.push({
         ...f,
+        line: actual,
         verified: true,
         resolvedFile: r.file,
-        why: line ? `quote found at line ${actual || "?"}, not the cited line ${line}` : `quote found once in file${actual ? ` (line ${actual})` : ""}`,
+        why: line ? `quote found at line ${actual}, not the cited line ${line}` : `quote found once in file (line ${actual})`,
       });
     } else if (n > 1) {
       out.push({ ...f, verified: false, resolvedFile: r.file, why: `quote appears ${n}× in file${line ? ", none near the cited line" : ""}: too generic to pin down` });
@@ -313,5 +351,72 @@ export async function verifyFindings(ws: Workspace, findings: Finding[], diffTex
   }
   return out;
 }
+
+/* ---------- Severity triage for checked findings ---------- */
+
+const COMMENT_LINE_RE = /^\s*(\/\/|\/\*|\*|#|--|<!--)/;
+
+/** True when every non-blank line of a quote is a comment. A "12 | " line-number prefix is ignored, as in the quote gate. */
+export const isCommentOnly = (quote: string) => {
+  const lines = String(quote).replace(/^\s*\d+\s*\|\s?/gm, "").split(/\r?\n/).filter((l) => l.trim());
+  return lines.length > 0 && lines.every((l) => COMMENT_LINE_RE.test(l));
+};
+
+/**
+ * The package.json files above `file`, nearest first, and whether any of them has a test script.
+ * `undefined` when there is no package.json above it: other ecosystems aren't judged.
+ */
+export async function hasTestRunner(ws: Workspace, files: string[], file: string): Promise<{ runner: boolean; nearest: string } | undefined> {
+  const known = new Set(files);
+  const pkgs: string[] = [];
+  for (let dir = path.posix.dirname(file); ; dir = path.posix.dirname(dir)) {
+    const p = dir === "." ? "package.json" : `${dir}/package.json`;
+    if (known.has(p)) pkgs.push(p);
+    if (dir === "." || dir === "/" || !dir) break;
+  }
+  if (!pkgs.length) return undefined;
+  for (const p of pkgs) {
+    try {
+      const scripts = JSON.parse(await fs.readFile(await ws.resolve(p), "utf8"))?.scripts || {};
+      // npm init's placeholder ("Error: no test specified") is not a runner.
+      if (Object.entries(scripts).some(([k, v]) => /^test(\b|:)/.test(k) && typeof v === "string" && !/no test specified/i.test(v))) {
+        return { runner: true, nearest: pkgs[0] };
+      }
+    } catch {
+      return undefined; // unreadable or not JSON: don't judge
+    }
+  }
+  return { runner: false, nearest: pkgs[0] };
+}
+
+const capLow = (f: CheckedFinding, reason: string): CheckedFinding =>
+  (f.severity || "").toLowerCase() === "low" ? { ...f, why: `${f.why}; ${reason}` } : { ...f, severity: "low", why: `${f.why}; capped at low: ${reason}` };
+
+/**
+ * Lower the severity of findings whose quote shows they can't be worth more:
+ * - the quote is only a comment, so the fix is (almost always) editing that comment;
+ * - a "tests" finding in a JS package with no test script, which can't act on it.
+ * Never changes whether a finding is quote-checked.
+ */
+export async function triageFindings(ws: Workspace, checked: CheckedFinding[]): Promise<CheckedFinding[]> {
+  const files = await ws.listFiles();
+  const out: CheckedFinding[] = [];
+  for (let f of checked) {
+    if (f.evidence && isCommentOnly(f.evidence)) f = capLow(f, "the quote is only a comment");
+    const file = f.resolvedFile || f.file;
+    if ((f.category || "").toLowerCase() === "tests" && file) {
+      const t = await hasTestRunner(ws, files, file);
+      if (t && !t.runner) f = capLow(f, `no test script in ${t.nearest}`);
+    }
+    out.push(f);
+  }
+  return out;
+}
+
+const SEVERITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+
+/** Most severe first; findings of equal severity keep the model's order. */
+export const bySeverity = <T extends Finding>(fs: T[]) =>
+  [...fs].sort((a, b) => (SEVERITY_RANK[(a.severity || "").toLowerCase()] ?? 4) - (SEVERITY_RANK[(b.severity || "").toLowerCase()] ?? 4));
 
 export const basenameOf = (p: string) => path.basename(p);
