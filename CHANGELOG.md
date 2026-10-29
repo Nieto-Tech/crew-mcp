@@ -19,6 +19,11 @@ All notable changes to crew-mcp are recorded here. The format follows
   `stale-comment`, low), and to skip missing tests where the code has no test setup. With
   `focus`, the summary says what was checked in that area and whether it came up clean.
 
+### Fixed
+- In a workspace that isn't a git repo, on Windows, files were listed with backslashes, so
+  model-written paths and citations never matched them ("file not found in workspace").
+  They are now listed with forward slashes, as in a git workspace.
+
 ## [0.3.0] - 2026-10-02
 
 ### Changed

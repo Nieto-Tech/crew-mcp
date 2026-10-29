@@ -367,10 +367,9 @@ export const isCommentOnly = (quote: string) => {
  * `undefined` when there is no package.json above it: other ecosystems aren't judged.
  */
 export async function hasTestRunner(ws: Workspace, files: string[], file: string): Promise<{ runner: boolean; nearest: string } | undefined> {
-  const slash = (p: string) => p.replace(/\\/g, "/"); // the non-git file walk lists Windows paths
-  const known = new Set(files.map(slash));
+  const known = new Set(files);
   const pkgs: string[] = [];
-  for (let dir = path.posix.dirname(slash(file)); ; dir = path.posix.dirname(dir)) {
+  for (let dir = path.posix.dirname(file); ; dir = path.posix.dirname(dir)) {
     const p = dir === "." ? "package.json" : `${dir}/package.json`;
     if (known.has(p)) pkgs.push(p);
     if (dir === "." || dir === "/" || !dir) break;

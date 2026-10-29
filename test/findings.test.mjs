@@ -111,3 +111,9 @@ test("bySeverity: most severe first, ties keep their order, unknown last", () =>
   const out = bySeverity([{ severity: "low", claim: "a" }, { claim: "b" }, { severity: "HIGH", claim: "c" }, { severity: "low", claim: "d" }, { severity: "critical", claim: "e" }]);
   assert.deepEqual(out.map((x) => x.claim), ["e", "c", "a", "d", "b"]);
 });
+
+test("listFiles outside git uses forward slashes on every platform", async () => {
+  const files = await ws.listFiles();
+  assert.ok(files.includes("backend/src/job.ts"), files.join(", "));
+  assert.ok(!files.some((f) => f.includes("\\")), files.join(", "));
+});
