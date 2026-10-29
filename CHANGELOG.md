@@ -19,6 +19,13 @@ All notable changes to crew-mcp are recorded here. The format follows
   `stale-comment`, low), and to skip missing tests where the code has no test setup. With
   `focus`, the summary says what was checked in that area and whether it came up clean.
 
+### Added
+- `crew_review_diff` takes `acknowledged`: findings from an earlier run that Claude already
+  rebutted or accepted, each starting with its headline `file:line`. They go into the
+  prompt so the scout doesn't raise them again, and a finding that still lands within 8
+  lines of one is collapsed into an *Already acknowledged* section instead of repeated in
+  full. The instructions sent on connect tell Claude to use it on re-runs.
+
 ## [0.3.0] - 2026-10-02
 
 ### Changed

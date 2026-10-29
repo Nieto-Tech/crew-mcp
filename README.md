@@ -334,6 +334,13 @@ claude mcp add --scope user crew -- crew-mcp
   is capped at low (the fix is editing the comment), and a `tests` finding is capped
   at low when no `package.json` above the file has a test script. Findings are
   listed most severe first. Triage never changes whether a finding is quote-checked.
+- **Acknowledged findings.** Each review run starts fresh, so a finding Claude already
+  rebutted comes back next time. Pass those as `acknowledged`, each starting with the
+  finding's headline `file:line` (e.g. `src/jobs/sync.ts:110 not transactional: deliberate`).
+  Every entry goes into the scout's prompt as "don't report again unless something's
+  new". A finding in the same file within 8 lines of an entry's `file:line` is listed
+  under *Already acknowledged*, collapsed to one line, not dropped. Free-text entries only
+  reach the prompt.
 - **Citations.** `file:line` and `file:start-end` references are resolved (shortened
   paths, build/worktree copies ignored, ties broken by context and line range), and
   the lines must exist. When a backticked identifier sits right next to a citation,

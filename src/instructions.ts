@@ -14,6 +14,9 @@ your own context and to get independent checks. Claude stays the lead.
   check the plausible ones, ignore the rest. It is for normal-sized changes. For a new
   repo, a big refactor or generated code it will say the diff is too large: review the
   riskiest files via \`paths\` instead, or skip it. Don't reach for force.
+- When you run crew_review_diff again after weighing its findings, pass the ones you
+  rebutted or accepted as \`acknowledged\` (each finding's headline file:line plus a few
+  words) so they aren't raised again. They come back collapsed to one line.
 - Risky changes (payments, auth, migrations, concurrency, data deletion): also call
   crew_second_opinion with includeDiff true and your reasoning. Weigh disagreement on
   the merits; don't defer just because it disagrees.
