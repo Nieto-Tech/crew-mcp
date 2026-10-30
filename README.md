@@ -255,6 +255,14 @@ narrow with `paths` or raise `timeoutMs` for that worker in `~/.config/crew/conf
 - **Malformed tool calls.** When Ollama can't parse the model's tool call (HTTP 500), the
   turn is redone with a nudge to use valid tool-call syntax, up to 2 times per task. A third
   malformed call fails the task.
+- **A local server restarting mid-call.** When a local worker refuses or drops the
+  connection partway through a call (Ollama being upgraded, say), crew waits for the server
+  to answer again and resends the same turn: the conversation is kept, so the call carries on
+  where it was. It waits at most `reconnectWaitMs` in all (default 30 s, per worker) and
+  resends at most 3 times. If the server isn't back, the call falls through to the next
+  worker in the role's chain, with the same rules as at the start (`cloud:false` still means
+  no cloud worker), and the output says which server dropped, with what error code, on which
+  turn. A cloud worker that drops isn't waited for; the call falls through straight away.
 - **One request at a time per local worker, across every session.** Each Claude Code session
   starts its own crew server, so crew queues through ticket files in
   `$XDG_STATE_HOME/crew/lanes/` (default `~/.local/state/crew/lanes/`): every crew process on

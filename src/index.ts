@@ -12,7 +12,7 @@ import { RECON_SCHEMA, REVIEW_SCHEMA, SYSTEM, codeMapBlock, reconPrompt, reviewP
 import { log } from "./log.js";
 import { describePolicy, isLocalWorker, loadPolicy, POLICY_FILE } from "./policy.js";
 import { diffStats, tooLargeMessage } from "./sizegate.js";
-import { MALFORMED_NOTE, finalRetryNote, reformatNote } from "./agent.js";
+import { MALFORMED_NOTE, finalRetryNote, reconnectNote, reformatNote } from "./agent.js";
 import { loadCodeMap, mapNote, mapStatus } from "./codemap.js";
 import { CREW_INSTRUCTIONS } from "./instructions.js";
 import { formatStats, readUsage, recordReformat, recordUsage, todayLine, type Outcome, type Period } from "./usage.js";
@@ -64,6 +64,7 @@ function via(r: TaskResult) {
       : "the final answer wasn't valid JSON, and one extra turn to re-emit it didn't fix that";
     line += `\n_${reformatNote(r.reformat)}: ${why}_`;
   }
+  if (r.reconnects) line += `\n_${reconnectNote(r.reconnects, r.reconnectMs || 0)}_`;
   if (r.skipped.length) line += `\n_fell back past: ${r.skipped.join("; ")}_`;
   if (r.partial) line += `\n_partial: ${r.partial}${r.diag ? ` (${r.diag})` : ""}. The scout answered with what it had; treat it as less complete._`;
   return line;

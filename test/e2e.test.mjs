@@ -1230,6 +1230,96 @@ test("other 500s are not retried", async () => {
   await c.close();
 });
 
+/* ---------- the server going away mid-call (#5) ---------- */
+
+// A fake Ollama of its own, with a config whose scout chain is it then codex. On turn 2 (the first request carrying
+// a tool result) it resets the socket: "blip" once and stays up, as a quick restart looks; "die" then stops listening;
+// "flap" stays up but resets every such request.
+async function flakyOllama(mode) {
+  const seen = [];
+  let dropped = false;
+  const server = http.createServer(async (req, res) => {
+    if (req.url === "/api/tags") { res.end(JSON.stringify({ models: [{ name: "test-model:latest" }] })); return; }
+    let b = ""; for await (const c of req) b += c;
+    const body = JSON.parse(b);
+    seen.push(body);
+    if ((!dropped || mode === "flap") && body.messages.some((m) => m.role === "tool")) {
+      dropped = true;
+      req.socket.destroy();
+      if (mode === "die") { server.close(); server.closeAllConnections(); }
+      return;
+    }
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ message: ollamaReply(body) }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const cfg = path.join(repo, "..", `crew-test-flaky-${server.address().port}.json`);
+  fs.writeFileSync(cfg, JSON.stringify({
+    workers: {
+      flaky: { provider: "ollama", baseUrl: base, model: "test-model", label: "Flaky GPU", reconnectWaitMs: 1200 },
+      chatgpt: { provider: "codex-cli", codexPath: fakeCodex },
+    },
+    roles: { scout: ["flaky", "chatgpt"], reviewer: ["chatgpt"] },
+  }));
+  return { cfg, base, seen, close: () => { server.closeAllConnections(); server.close(); } };
+}
+
+test("Ollama dropping the connection mid-call and coming back: the same turn is resent and the call succeeds", async () => {
+  const f = await flakyOllama("blip");
+  const calls = codexCalls();
+  try {
+    const c = await connect({ CREW_CONFIG: f.cfg, CODEX_CALLS: calls });
+    const out = await call(c, "crew_recon", { question: "how does charging work?" });
+    assert.match(out, /_via Flaky GPU/);
+    assert.match(out, /_connection lost and turn retried \([\d.]+s waiting for the server\)_/);
+    assert.match(out, /`src\/pay.ts`: charge logic/);
+    assert.equal(f.seen.length, 3, "turn 1, turn 2 dropped, turn 2 resent");
+    assert.deepEqual(f.seen[2].messages, f.seen[1].messages, "the conversation is resent as it was, not restarted");
+    assert.ok(!fs.existsSync(calls), "no fallback when the server came back");
+  } finally { f.close(); }
+});
+
+test("Ollama dropping the connection and staying down: falls through to the next worker and says what happened", async () => {
+  const f = await flakyOllama("die");
+  try {
+    const c = await connect({ CREW_CONFIG: f.cfg });
+    const out = await call(c, "crew_recon", { question: "map charging" });
+    assert.match(out, /codex recon: charge flow/);
+    const esc = f.base.replace(/[.]/g, "\\.");
+    assert.match(out, new RegExp(`_fell back past: flaky: Ollama @ ${esc} dropped the connection mid-call \\((ECONNRESET|UND_ERR_SOCKET)\\) on turn 2/16; not back after [\\d.]+s_`));
+    assert.doesNotMatch(out, /fetch failed/);
+  } finally { f.close(); }
+});
+
+test("a server that keeps dropping the same turn is given up on after 3 resends, and the call falls through", async () => {
+  const f = await flakyOllama("flap");
+  try {
+    const c = await connect({ CREW_CONFIG: f.cfg });
+    const out = await call(c, "crew_recon", { question: "map charging" });
+    assert.match(out, /codex recon: charge flow/);
+    assert.match(out, /fell back past: flaky: Ollama @ \S+ dropped the connection mid-call \((ECONNRESET|UND_ERR_SOCKET)\) on turn 2\/16; came back 3× and the turn was resent, then dropped it again: gave up after 3 resends_/);
+    assert.equal(f.seen.length, 5, "turn 1, then turn 2 sent four times");
+  } finally { f.close(); }
+});
+
+test("Ollama dropping the connection under cloud:false: no fallback, and the error names the worker and the cause", async () => {
+  const f = await flakyOllama("die");
+  const dir = policyRepo('{ "cloud": false }');
+  const calls = codexCalls();
+  try {
+    const c = await connect({ CREW_CONFIG: f.cfg, CODEX_CALLS: calls });
+    const r = await c.callTool({ name: "crew_recon", arguments: { question: "map charging", workspace: dir } });
+    assert.equal(r.isError, true);
+    const out = r.content[0].text;
+    assert.match(out, /Worker "flaky": Ollama @ \S+ dropped the connection mid-call \((ECONNRESET|UND_ERR_SOCKET)\) on turn 2\/16; not back after [\d.]+s, and there is no worker to fall back to/);
+    assert.match(out, /Not falling back/);
+    assert.match(out, /excluded: chatgpt/);
+    assert.doesNotMatch(out, /^crew error: fetch failed$/m);
+    assert.ok(!fs.existsSync(calls), "codex must not run");
+  } finally { f.close(); }
+});
+
 /* ---------- v0.1.7: model names ---------- */
 
 test("a configured model that differs from the installed one only in tag case is used, and sent, as installed", async () => {
