@@ -63,9 +63,10 @@ is. `nieto-crew` exists because the unrelated `crew-mcp` package on npm register
 - Releasing is in `CONTRIBUTING.md`: a version PR, then `gh release create vX.Y.Z`. That
   triggers `.github/workflows/publish.yml`, which waits for the `npm` environment's reviewer.
   Never run `npm publish` by hand. A manual run of the workflow is always a dry run.
-- Publishing uses a one-time `NPM_TOKEN` for the first release; after that the plan is npm
-  trusted publishing (OIDC) with tokens disallowed. `repository.url` in `package.json` must
-  match the GitHub repo for that to work, so renaming the repo means updating both.
+- Publishing uses npm trusted publishing (OIDC): no npm token or secret exists. Both the
+  trusted-publisher entry and "disallow tokens" are package settings on npmjs.com, not in this
+  repo. `repository.url` in `package.json` must match the GitHub repo for that to work, so
+  renaming the repo means updating both.
 
 ## Working on crew with crew
 

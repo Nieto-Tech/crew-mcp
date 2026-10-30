@@ -6,6 +6,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-30
+
+### Changed
+- Releases publish through npm trusted publishing (OIDC) instead of an npm token: no token
+  exists to leak or renew. The publish workflow uses `actions/setup-node@v7` with its dependency
+  cache off. No change to the package itself.
+
 ## [0.4.0] - 2026-10-30
 
 First release published to npm, as `@nieto-tech/nieto-crew`.
@@ -132,7 +139,8 @@ The 0.1.x series was developed privately. In summary:
   only restructure (no new file paths or evidence quotes); reformat turns logged to an owner-only
   file; up to two retries per task for malformed tool calls.
 
-[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.4.0...main
+[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.4.1...main
+[0.4.1]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.0...v0.2.1
