@@ -1,12 +1,18 @@
 # Changelog
 
-All notable changes to crew-mcp are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to Nieto Crew (`@nieto-tech/nieto-crew`, formerly `crew-mcp`) are
+recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
 ### Changed
+- **Renamed to Nieto Crew.** The package is `@nieto-tech/nieto-crew`, the command is
+  `nieto-crew`, and the server calls itself `nieto-crew`; register it under that name too
+  (`claude mcp add --scope user nieto-crew -- ...`). The unrelated `crew-mcp` package on npm
+  registers itself as `crew` and would replace a server of that name. The `crew_*` tool names,
+  `~/.config/crew/`, `~/.local/state/crew/`, `CREW_*` variables and `.crew.json` are unchanged,
+  so config, usage history and the shared queue carry over. The README says how to re-register.
 - `crew_review_diff` findings and `crew_recon` risks that pass the quote check are shown at the
   line where their quote really is.
   Models often cite a line 10-20 off; the note used to say so while the headline

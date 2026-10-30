@@ -17,7 +17,7 @@ npm test
 OpenAI-compatible server and a fake Codex CLI, over the real MCP protocol. It should pass offline.
 
 To try a change in Claude Code, point it at your build:
-`claude mcp add --scope user crew -- node /absolute/path/to/crew-mcp/dist/index.js`, then run
+`claude mcp add --scope user nieto-crew -- node /absolute/path/to/crew-mcp/dist/index.js`, then run
 `crew_status`.
 
 The benchmark (`npm run bench`, see `bench/README.md`) needs a local model and is optional.

@@ -230,6 +230,15 @@ test("sends usage instructions on connect", async () => {
   await c.close();
 });
 
+test("the server and its command are named nieto-crew; the tools keep their crew_* names", async () => {
+  const c = await connect();
+  assert.equal(c.getServerVersion()?.name, "nieto-crew");
+  const pkg = JSON.parse(fs.readFileSync(path.join(here, "..", "package.json"), "utf8"));
+  assert.equal(pkg.name, "@nieto-tech/nieto-crew");
+  assert.deepEqual(pkg.bin, { "nieto-crew": "dist/index.js" });
+  await c.close();
+});
+
 test("lists the crew tools", async () => {
   const c = await connect();
   const names = (await c.listTools()).tools.map((t) => t.name).sort();
