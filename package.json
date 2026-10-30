@@ -1,6 +1,6 @@
 {
   "name": "@nieto-tech/nieto-crew",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Nieto Crew: an MCP server that gives Claude Code a crew: a local GPU model and ChatGPT for recon, diff review, second opinions and deterministic checks.",
   "license": "MIT",
   "author": "Nieto Technology Partners <opensource@nieto.com>",

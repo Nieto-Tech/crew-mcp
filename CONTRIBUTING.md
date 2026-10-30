@@ -43,3 +43,12 @@ Small fixes (typos, a clearer error message) are welcome without an issue first.
 bigger, open an issue so we can agree on the approach before you spend time on it.
 
 By contributing you agree that your contribution is licensed under the MIT license (`LICENSE`).
+
+## Releasing (maintainers)
+
+1. In a PR: bump the version in `package.json` (then `npm install --package-lock-only`) and
+   `VERSION` in `src/index.ts` (a test checks they match), and move `[Unreleased]` in
+   `CHANGELOG.md` under the new version with today's date.
+2. After it merges: `gh release create vX.Y.Z --generate-notes` from `main`.
+3. Approve the `npm` environment deployment in the Actions run. The workflow checks the tag
+   matches `package.json`, runs the tests and publishes `@nieto-tech/nieto-crew`.

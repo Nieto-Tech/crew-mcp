@@ -1,35 +1,57 @@
 name: Publish to npm
 
-# Manual only: run it from the Actions tab. It never runs on push, tag or release.
-# It defaults to a dry run; publishing for real means unticking dry_run. package.json is not
-# private, so this workflow is the only thing between a run and the public registry. To make a
-# real publish need approval, add required reviewers to the `npm` environment in the repo settings.
+# Publishes when a GitHub release is published (`gh release create vX.Y.Z`), after the `npm`
+# environment's required reviewer approves the run, so every published version has a tag. Run by
+# hand from the Actions tab it is always a dry run: build, test and pack, publish nothing. To
+# retry a failed release, re-run that release's run. The `npm` environment only admits `main`
+# and `v*` tags.
+#
+# Auth: NPM_TOKEN (an environment secret) is a one-time bootstrap for the first publish, because
+# npm's trusted publishing can only be configured on a package that already exists. Once it is
+# configured, delete the token and the secret: npm then authenticates this workflow over OIDC
+# (that is what `id-token: write` is for) and adds provenance on its own.
 on:
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Dry run (npm publish --dry-run): build, test and pack, but publish nothing"
-        type: boolean
-        default: true
+  release:
+    types: [published]
+  workflow_dispatch: # dry run only
 
 permissions:
   contents: read
-  id-token: write # npm provenance: lets npm verify this build came from this workflow
+  id-token: write # npm provenance now, and trusted publishing (OIDC) once it is configured
+
+# One publish at a time; a second run waits instead of racing the first to the registry.
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: npm # add required reviewers to this environment in the repo settings
+    environment: npm
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Trusted publishing needs npm 11.5.1+ and Node 22.14+; Node 24 ships npm 11.
+          node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
+          # No dependency cache in a release build (npm's guidance for trusted publishing).
+      - name: Check the release tag matches package.json
+        if: github.event_name == 'release'
+        run: |
+          want="v$(node -p 'require("./package.json").version')"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "::error::Release tag $GITHUB_REF_NAME does not match package.json ($want)"
+            exit 1
+          fi
+      - name: Check the npm version supports trusted publishing
+        run: |
+          npm --version
+          node -e 'const [a,b,c]=process.argv[1].split(".").map(Number); process.exit(a>11||(a===11&&(b>5||(b===5&&c>=1)))?0:1)' "$(npm --version)" \
+            || { echo "::error::npm $(npm --version) is older than 11.5.1"; exit 1; }
       - run: npm ci
       - run: npm test
       - name: Publish
-        run: npm publish --provenance --access public ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: npm publish --provenance --access public ${{ github.event_name != 'release' && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
