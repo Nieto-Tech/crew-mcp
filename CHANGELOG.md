@@ -27,6 +27,13 @@ All notable changes to crew-mcp are recorded here. The format follows
   full. The instructions sent on connect tell Claude to use it on re-runs.
 
 ### Fixed
+- A local server that restarts mid-call (an Ollama upgrade, say) no longer fails the whole call
+  with a bare `crew error: fetch failed` (#5). crew waits for the server to answer again, up to
+  `reconnectWaitMs` (new, default 30 s per worker), and resends the turn it was on with the
+  conversation intact. If the server stays down, the call falls through to the next worker in
+  the role's chain (never to a cloud worker under `cloud:false`), and the output names the
+  server, the error code and the turn. The same happens when a worker's cached "up" status is
+  stale at the start of a call.
 - In a workspace that isn't a git repo, on Windows, files were listed with backslashes, so
   model-written paths and citations never matched them ("file not found in workspace").
   They are now listed with forward slashes, as in a git workspace.

@@ -19,6 +19,8 @@ export interface WorkerConfig {
   queueWaitMs?: number;
   /** Local workers: how long a waiting crew_recon lets other calls go ahead of it in the queue (default 180000). */
   reconYieldMs?: number;
+  /** Local workers: how long a call waits, in all, for the server to come back after it drops the connection mid-call (default 30000). */
+  reconnectWaitMs?: number;
   /** Total characters of tool output the model may read per task. Defaults from numCtx. */
   readBudgetChars?: number;
   maxTurns?: number;
@@ -159,5 +161,6 @@ export function budgetsFor(w: WorkerConfig) {
     timeoutMs: w.timeoutMs ?? 300_000,
     queueWaitMs: w.queueWaitMs ?? 600_000,
     reconYieldMs: w.reconYieldMs ?? 180_000,
+    reconnectWaitMs: w.reconnectWaitMs ?? 30_000,
   };
 }

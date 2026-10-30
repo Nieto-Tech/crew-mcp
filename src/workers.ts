@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { budgetsFor, userConfigPath, type CrewConfig, type WorkerConfig } from "./config.js";
 import { acquire } from "./lane.js";
 import { isLocalWorker, loadPolicy, policyReason, type Policy } from "./policy.js";
-import { OllamaProvider, OpenAIProvider, diagLine, runAgent, type AgentStats, type AnswerSpec, type FinalRetry, type Reformat, type ReformatDetail } from "./agent.js";
+import { ConnectionLostError, OllamaProvider, OpenAIProvider, diagLine, runAgent, secs, type AgentStats, type AnswerSpec, type FinalRetry, type Reformat, type ReformatDetail } from "./agent.js";
 import { runCodex } from "./codex.js";
 import { launchSpec } from "./spawncmd.js";
 import { Budget, Workspace } from "./workspace.js";
@@ -40,8 +41,8 @@ export async function checkWorker(name: string, w: WorkerConfig): Promise<Availa
   try {
     if (w.provider === "ollama") {
       const base = (w.baseUrl || "http://localhost:11434").replace(/\/$/, "");
-      const res = await withTimeout(fetch(`${base}/api/tags`), 2_500);
-      const data: any = await res.json();
+      // The body is inside the timeout too: a server stalling mid-restart must not hang the reconnect wait.
+      const data: any = await withTimeout(fetch(`${base}/api/tags`).then((res) => res.json()), 2_500);
       const names: string[] = (data.models || []).map((m: any) => m.name);
       const want = w.model || "";
       const found = findModel(names, want);
@@ -84,7 +85,31 @@ export async function checkWorker(name: string, w: WorkerConfig): Promise<Availa
   return a;
 }
 
-export async function resolveRole(config: CrewConfig, role: "scout" | "reviewer", policy?: Policy) {
+/** Poll the server until it answers again, for at most `ms`. False if it didn't, or the call was aborted. */
+async function waitForWorker(name: string, w: WorkerConfig, ms: number, signal: AbortSignal): Promise<boolean> {
+  const until = Date.now() + ms;
+  for (let delay = 500; ; delay = Math.min(delay * 2, 4_000)) {
+    if (signal.aborted) return false;
+    cache.delete(name);
+    if ((await checkWorker(name, w)).ok) return !signal.aborted;
+    const left = until - Date.now();
+    if (left <= 0 || signal.aborted) return false;
+    try {
+      await sleep(Math.min(delay, left), undefined, { signal });
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** Turns a task may resend after the server came back; one more drop and the worker is given up on. */
+const MAX_RECONNECTS = 3;
+
+/** A worker lost the connection mid-call and didn't come back: the role falls through to the next one. */
+class WorkerGoneError extends Error {}
+
+/** `gone`: workers already given up on in this call, with why; they are listed as tried, never checked again. */
+export async function resolveRole(config: CrewConfig, role: "scout" | "reviewer", policy?: Policy, gone?: Map<string, string>) {
   const tried: string[] = [];
   const excluded: string[] = [];
   for (const name of config.roles[role]) {
@@ -92,6 +117,10 @@ export async function resolveRole(config: CrewConfig, role: "scout" | "reviewer"
     // cloud:false is absolute: a cloud worker is never checked, never used, never a fallback.
     if (policy && !policy.cloud && !isLocalWorker(w)) {
       excluded.push(name);
+      continue;
+    }
+    if (gone?.has(name)) {
+      tried.push(`${name}: ${gone.get(name)}`);
       continue;
     }
     const a = await checkWorker(name, w);
@@ -137,6 +166,9 @@ export interface TaskResult {
   malformedRetries?: number;
   /** Set when the final answer needed a reformat turn: "ok" if that produced the JSON it was allowed to keep. */
   reformat?: Reformat;
+  /** Turns resent after the server dropped the connection and came back, and the time spent waiting for it. */
+  reconnects?: number;
+  reconnectMs?: number;
   /** The raw answer and the reformat's reply: for the side log, never the tool output. */
   reformatDetail?: ReformatDetail;
   /** One-line where-did-the-time-go summary (agent workers only). */
@@ -146,7 +178,7 @@ export interface TaskResult {
 /** Share of the worker's timeout spent exploring; the rest is reserved for the answer. */
 const EXPLORE_SHARE = 0.65;
 
-export async function runTask(opts: {
+interface TaskOpts {
   config: CrewConfig;
   role: "scout" | "reviewer";
   ws: Workspace;
@@ -158,15 +190,41 @@ export async function runTask(opts: {
   tool?: string;
   /** The JSON the answer must be; agent workers get one reformat turn if the answer doesn't parse. */
   answer?: AnswerSpec;
-}): Promise<TaskResult> {
+}
+
+export async function runTask(opts: TaskOpts): Promise<TaskResult> {
   // Load the policy here too, so no caller can reach a model without it being applied.
   const policy = opts.policy ?? loadPolicy(opts.ws.root);
-  const { name, w, skipped } = await resolveRole(opts.config, opts.role, policy);
+  // Workers that lost the connection mid-call and didn't come back, with why. The role falls through past them,
+  // with the same rules as at the start: cloud:false still means no cloud worker, ever.
+  const gone = new Map<string, string>();
+  for (;;) {
+    let picked: Awaited<ReturnType<typeof resolveRole>>;
+    try {
+      picked = await resolveRole(opts.config, opts.role, policy, gone);
+    } catch (e: any) {
+      const last = [...gone].pop();
+      if (!last) throw e;
+      throw new Error(`Worker "${last[0]}": ${last[1]}, and there is no worker to fall back to. ${e.message}`);
+    }
+    try {
+      return await runOn(opts, picked);
+    } catch (e: any) {
+      if (!(e instanceof WorkerGoneError)) throw e;
+      gone.set(picked.name, e.message);
+      cache.delete(picked.name);
+      log(`${opts.role}: ${picked.name}: ${e.message}; trying the next worker`);
+    }
+  }
+}
+
+async function runOn(opts: TaskOpts, { name, w, skipped }: { name: string; w: WorkerConfig; skipped: string[] }): Promise<TaskResult> {
   const b = budgetsFor(w);
 
   // Serialize local workers, across every crew process on this machine. The timeout clock starts only once we hold the worker.
   const queuedAt = Date.now();
-  const serialize = w.provider !== "codex-cli" && isLocalWorker(w);
+  const local = isLocalWorker(w);
+  const serialize = w.provider !== "codex-cli" && local;
   const release = serialize
     ? await acquire(w, name, { waitMs: b.queueWaitMs, yieldMs: b.reconYieldMs, workspace: path.basename(opts.ws.root), tool: opts.tool || opts.role, onWait: opts.onProgress })
     : () => {};
@@ -177,6 +235,29 @@ export async function runTask(opts: {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), b.timeoutMs);
   const stats: AgentStats = { turns: 0, toolCalls: 0, modelMs: 0, evalTokens: 0, malformedRetries: 0 };
+
+  // A local server that drops the connection is usually restarting (an Ollama upgrade takes seconds): wait for it,
+  // within reconnectWaitMs for the whole task, and resend the turn. A cloud API isn't waited for.
+  let waitLeft = b.reconnectWaitMs;
+  let drops = 0;
+  let gaveUp = ""; // why the last drop wasn't waited out, for the message
+  const reconnect = async (e: ConnectionLostError) => {
+    cache.delete(name);
+    if (++drops > MAX_RECONNECTS) {
+      gaveUp = `, then dropped it again: gave up after ${MAX_RECONNECTS} resends`;
+      return false;
+    }
+    if (waitLeft <= 0) {
+      gaveUp = `, then dropped it again: the ${secs(b.reconnectWaitMs)}s reconnect wait was used up`;
+      return false;
+    }
+    opts.onProgress?.(`${w.label || name}: ${e.message} on turn ${e.turn}; waiting up to ${secs(waitLeft)}s for it to come back…`);
+    const t = Date.now();
+    const back = await waitForWorker(name, w, waitLeft, ac.signal);
+    waitLeft -= Date.now() - t;
+    if (!back) gaveUp = `; not back after ${secs(Date.now() - t)}s`;
+    return back;
+  };
 
   // Everything from here on is inside the try, so the worker is always released.
   try {
@@ -190,7 +271,7 @@ export async function runTask(opts: {
         timeoutMs: b.timeoutMs,
         signal: ac.signal,
       });
-      return { text, worker: name, label: w.label || name, model: w.model, ms: Date.now() - started, filesRead: [], provider: w.provider, local: isLocalWorker(w), charsRead: 0, skipped, queuedMs };
+      return { text, worker: name, label: w.label || name, model: w.model, ms: Date.now() - started, filesRead: [], provider: w.provider, local, charsRead: 0, skipped, queuedMs };
     }
 
     const provider = w.provider === "ollama" ? new OllamaProvider(w) : new OpenAIProvider(w);
@@ -205,6 +286,7 @@ export async function runTask(opts: {
       softDeadline: started + b.timeoutMs * EXPLORE_SHARE,
       stats,
       answer: opts.answer,
+      reconnect: local ? reconnect : undefined,
       onProgress: opts.onProgress,
       onLog: log,
     });
@@ -219,7 +301,7 @@ export async function runTask(opts: {
       evalTokens: stats.evalTokens || undefined,
       filesRead: r.filesRead,
       provider: w.provider,
-      local: isLocalWorker(w),
+      local,
       charsRead: budget.used,
       skipped,
       queuedMs,
@@ -228,6 +310,8 @@ export async function runTask(opts: {
       malformedRetries: r.malformedRetries || undefined,
       reformat: r.reformat,
       reformatDetail: r.reformatDetail,
+      reconnects: stats.reconnects,
+      reconnectMs: stats.reconnectMs,
       diag: diagLine(stats, queuedMs),
     };
   } catch (e: any) {
@@ -237,7 +321,7 @@ export async function runTask(opts: {
       worker: name,
       provider: w.provider,
       model: w.model,
-      local: isLocalWorker(w),
+      local,
       workspace: path.basename(opts.ws.root),
       wallSeconds: Math.round(Date.now() - started) / 1000,
       turns: stats.turns || undefined,
@@ -254,6 +338,13 @@ export async function runTask(opts: {
           `${w.provider === "codex-cli" ? "" : ` (${diagLine(stats, queuedMs)})`}. ` +
           `Fix: narrow the request with \`paths\`, or raise timeoutMs for "${name}" in ${userConfigPath()}.`
       );
+    }
+    if (e instanceof ConnectionLostError) {
+      // e.g. `Ollama @ http://localhost:11434 dropped the connection mid-call (ECONNRESET) on turn 9/16; not back after 30s`
+      const server = `${w.provider === "ollama" ? "Ollama" : "server"} @ ${e.baseUrl}`;
+      const how = e.code === "ECONNREFUSED" ? "refused the connection" : "dropped the connection mid-call";
+      const retried = stats.reconnects ? `; came back ${stats.reconnects}× and the turn was resent` : "";
+      throw new WorkerGoneError(`${server} ${how} (${e.code}) on turn ${e.turn}/${e.maxTurns}${retried}${gaveUp}`);
     }
     throw e;
   } finally {

@@ -74,6 +74,40 @@ export class ToolCallParseError extends Error {}
 const TOOL_PARSE_RE = /xml syntax error|(?:error|failed) (?:parsing|to parse) tool[ _-]?call|<\/?(?:parameter|function|tool_call)>/i;
 export const isToolCallParseFailure = (status: number, body: string) => status === 500 && TOOL_PARSE_RE.test(body);
 
+/**
+ * The connection to the model server failed: refused, reset or closed (e.g. Ollama restarting mid-call). Not an HTTP
+ * error status and not our own abort. `turn`/`maxTurns` are filled in by the agent loop.
+ */
+export class ConnectionLostError extends Error {
+  turn?: number;
+  maxTurns?: number;
+  constructor(readonly code: string, readonly baseUrl: string) {
+    super(`${code === "ECONNREFUSED" ? "connection refused" : "connection dropped"} by ${baseUrl} (${code})`);
+  }
+}
+
+const CONNECTION_CODES = new Set([
+  "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "EPIPE", "EHOSTUNREACH", "ENETUNREACH",
+  "UND_ERR_SOCKET", "UND_ERR_CLOSED", "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/** The connection-level code under undici's bare "fetch failed" / "terminated", or undefined if it isn't one. */
+export function connectionCode(e: any): string | undefined {
+  for (let c = e, depth = 0; c && depth < 4; c = c.cause, depth++) {
+    if (CONNECTION_CODES.has(c.code)) return c.code;
+    // localhost resolves to ::1 and 127.0.0.1; both refusing comes back as an AggregateError.
+    const inner = Array.isArray(c.errors) ? c.errors.find((x: any) => CONNECTION_CODES.has(x?.code)) : undefined;
+    if (inner) return inner.code;
+  }
+  return undefined;
+}
+
+/** Rethrow a connection-level failure as ConnectionLostError; anything else (HTTP errors, our own abort) as it was. */
+function asConnectionLost(e: unknown, baseUrl: string, signal: AbortSignal): unknown {
+  const code = signal.aborted ? undefined : connectionCode(e);
+  return code ? new ConnectionLostError(code, baseUrl) : e;
+}
+
 export const MALFORMED_NOTE = "malformed tool call retried";
 /** Malformed tool calls redone per task, each with the nudge; one more fails the task. */
 export const MAX_MALFORMED_RETRIES = 2;
@@ -142,19 +176,25 @@ export class OllamaProvider implements ChatProvider {
     // unless thinkOnFinal is false or this is the retry of an empty answer.
     if (!final) body.think = this.w.thinkOnTools ?? false;
     else if (noThink || this.w.thinkOnFinal === false) body.think = false;
-    const res = await fetch(`${(this.w.baseUrl || "http://localhost:11434").replace(/\/$/, "")}/api/chat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-      redirect: "error", // never let a local endpoint bounce the prompt to another host
-    });
-    if (!res.ok) {
-      const errText = (await res.text()).slice(0, 300);
-      const msg = `Ollama ${res.status}: ${errText}`;
-      throw isToolCallParseFailure(res.status, errText) ? new ToolCallParseError(msg) : new Error(msg);
+    const base = (this.w.baseUrl || "http://localhost:11434").replace(/\/$/, "");
+    let data: any;
+    try {
+      const res = await fetch(`${base}/api/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal,
+        redirect: "error", // never let a local endpoint bounce the prompt to another host
+      });
+      if (!res.ok) {
+        const errText = (await res.text()).slice(0, 300);
+        const msg = `Ollama ${res.status}: ${errText}`;
+        throw isToolCallParseFailure(res.status, errText) ? new ToolCallParseError(msg) : new Error(msg);
+      }
+      data = await res.json();
+    } catch (e) {
+      throw asConnectionLost(e, base, signal);
     }
-    const data: any = await res.json();
     const msg = data.message || {};
     return {
       content: stripThink(msg.content),
@@ -216,15 +256,21 @@ export class OpenAIProvider implements ChatProvider {
     const think = this.enableThinking(final, noThink);
     if (think !== undefined) body.chat_template_kwargs = { enable_thinking: think };
 
-    const res = await fetch(`${(this.w.baseUrl || "https://api.openai.com/v1").replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
-      body: JSON.stringify(body),
-      signal,
-      redirect: "error",
-    });
-    if (!res.ok) throw new Error(`OpenAI-compatible API ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const data: any = await res.json();
+    const base = (this.w.baseUrl || "https://api.openai.com/v1").replace(/\/$/, "");
+    let data: any;
+    try {
+      const res = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+        body: JSON.stringify(body),
+        signal,
+        redirect: "error",
+      });
+      if (!res.ok) throw new Error(`OpenAI-compatible API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+      data = await res.json();
+    } catch (e) {
+      throw asConnectionLost(e, base, signal);
+    }
     const msg = data.choices?.[0]?.message || {};
     return {
       content: stripThink(msg.content || ""),
@@ -361,9 +407,16 @@ export interface AgentStats {
   malformedRetries: number;
   /** Set when the final answer wasn't the task's JSON and one reformat turn was run. */
   reformat?: Reformat;
+  /** Turns retried after the connection to the server was lost and it came back. */
+  reconnects?: number;
+  /** Time spent waiting for the server to come back (not in modelMs). */
+  reconnectMs?: number;
 }
 
-const secs = (ms: number) => (ms < 10_000 ? (ms / 1000).toFixed(1) : String(Math.round(ms / 1000)));
+export const secs = (ms: number) => (ms < 10_000 ? (ms / 1000).toFixed(1) : String(Math.round(ms / 1000)));
+
+export const reconnectNote = (n: number, ms: number) =>
+  `connection lost and turn retried${n > 1 ? ` ×${n}` : ""} (${secs(ms)}s waiting for the server)`;
 
 /** One line that tells thinking from queueing from context growth. */
 export function diagLine(s: AgentStats, queuedMs: number): string {
@@ -373,7 +426,8 @@ export function diagLine(s: AgentStats, queuedMs: number): string {
     (s.evalTokens ? `, ${s.evalTokens.toLocaleString("en-US")} tokens generated` : "") +
     (s.finalRetry ? `, ${finalRetryNote(s.finalRetry)}` : "") +
     (s.malformedRetries ? `, ${MALFORMED_NOTE}${s.malformedRetries > 1 ? ` ×${s.malformedRetries}` : ""}` : "") +
-    (s.reformat ? `, ${reformatNote(s.reformat)}` : "")
+    (s.reformat ? `, ${reformatNote(s.reformat)}` : "") +
+    (s.reconnects ? `, ${reconnectNote(s.reconnects, s.reconnectMs || 0)}` : "")
   );
 }
 
@@ -398,6 +452,11 @@ export async function runAgent(opts: {
   stats?: AgentStats;
   /** The JSON the answer must be. When set, an answer that doesn't parse gets one reformat turn. */
   answer?: AnswerSpec;
+  /**
+   * Called when the connection to the server is lost. Resolves true once the server is back, and the same turn is
+   * sent again (the conversation is all here, so nothing restarts); false and the ConnectionLostError is thrown.
+   */
+  reconnect?: (e: ConnectionLostError) => Promise<boolean>;
   onProgress?: (msg: string) => void;
   onLog?: (msg: string) => void;
 }): Promise<AgentResult> {
@@ -408,6 +467,30 @@ export async function runAgent(opts: {
   const filesRead = new Set<string>();
   const stats = opts.stats ?? { turns: 0, toolCalls: 0, modelMs: 0, evalTokens: 0, malformedRetries: 0 };
 
+  // One model request, timed. A lost connection waits for the server (outside the timing) and resends.
+  const chat = async (sent: ChatMessage[], tools: ToolSpec[] | undefined, final: boolean, noThink?: boolean, numPredict?: number): Promise<ChatReply> => {
+    for (;;) {
+      const t = Date.now();
+      let lost: ConnectionLostError;
+      try {
+        return await opts.provider.chat(sent, tools, opts.signal, final, noThink, numPredict);
+      } catch (e) {
+        if (!(e instanceof ConnectionLostError)) throw e;
+        lost = e;
+      } finally {
+        stats.modelMs += Date.now() - t;
+      }
+      lost.turn = stats.turns;
+      lost.maxTurns = opts.maxTurns;
+      const w0 = Date.now();
+      const back = opts.reconnect ? await opts.reconnect(lost) : false;
+      stats.reconnectMs = (stats.reconnectMs || 0) + (Date.now() - w0);
+      if (!back) throw lost;
+      stats.reconnects = (stats.reconnects || 0) + 1;
+      opts.onLog?.(`turn ${stats.turns}: ${lost.message}; server is back after ${secs(Date.now() - w0)}s, resending the turn`);
+    }
+  };
+
   // A model that writes a broken tool call makes Ollama answer 500. Redo that turn with a nudge, up to
   // MAX_MALFORMED_RETRIES times per task (not per turn); one more and the error surfaces and the task fails.
   const ask = async (tools: ToolSpec[] | undefined, final: boolean, noThink?: boolean): Promise<ChatReply> => {
@@ -415,7 +498,7 @@ export async function runAgent(opts: {
     let sent: ChatMessage[] = messages;
     for (;;) {
       try {
-        return await opts.provider.chat(sent, tools, opts.signal, final, noThink);
+        return await chat(sent, tools, final, noThink);
       } catch (e) {
         if (!(e instanceof ToolCallParseError)) throw e;
         if (stats.malformedRetries >= MAX_MALFORMED_RETRIES) {
@@ -444,13 +527,8 @@ export async function runAgent(opts: {
     }
 
     const t0 = Date.now();
-    let reply: ChatReply;
-    try {
-      reply = await ask(finalTurn ? undefined : REPO_TOOLS, finalTurn);
-    } finally {
-      stats.modelMs += Date.now() - t0;
-      stats.turns = turn;
-    }
+    stats.turns = turn;
+    let reply = await ask(finalTurn ? undefined : REPO_TOOLS, finalTurn);
     stats.evalTokens += reply.evalCount || 0;
 
     if (finalTurn) {
@@ -463,12 +541,7 @@ export async function runAgent(opts: {
       const empty = !reply.content.trim();
       const cutOff = !empty && reply.doneReason === "length" && !extractJson(reply.content, (v) => v && typeof v === "object");
       if ((empty || cutOff) && !reply.toolCalls.length && opts.provider.canDropThinking) {
-        const t1 = Date.now();
-        try {
-          reply = await ask(undefined, true, true);
-        } finally {
-          stats.modelMs += Date.now() - t1;
-        }
+        reply = await ask(undefined, true, true);
         stats.evalTokens += reply.evalCount || 0;
         stats.finalRetry = empty ? "empty" : "cut-off";
         opts.onLog?.(
@@ -508,12 +581,8 @@ export async function runAgent(opts: {
       let reformatDetail: ReformatDetail | undefined;
       if (opts.answer && reply.content.trim() && !extractJson(reply.content, opts.answer.isValid)) {
         const raw = reply.content;
-        const t2 = Date.now();
         try {
-          const re = await opts.provider.chat(
-            [{ role: "user", content: reformatPrompt(opts.answer.schema, raw) }],
-            undefined, opts.signal, true, true, reformatNumPredict(raw),
-          );
+          const re = await chat([{ role: "user", content: reformatPrompt(opts.answer.schema, raw) }], undefined, true, true, reformatNumPredict(raw));
           stats.evalTokens += re.evalCount || 0;
           const parsed = extractJson(re.content, opts.answer.isValid);
           // An all-empty skeleton means the raw answer had nothing to keep, e.g. a lead-in ("Final report:") whose
@@ -531,8 +600,6 @@ export async function runAgent(opts: {
           stats.reformat = "failed";
           reformatDetail = { raw, reply: "" };
           opts.onLog?.(`${reformatNote(stats.reformat)}: ${e?.message || e}`);
-        } finally {
-          stats.modelMs += Date.now() - t2;
         }
       }
       return {
