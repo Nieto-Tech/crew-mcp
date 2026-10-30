@@ -6,6 +6,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-30
+
+First release published to npm, as `@nieto-tech/nieto-crew`.
+
+### Added
+- Releases publish to npm from GitHub Actions when a GitHub release is published, after the
+  `npm` environment's reviewer approves; the workflow checks the tag matches `package.json`.
+  Run by hand from the Actions tab, it is always a dry run.
+  Run by hand, it is always a dry run.
+
 ### Changed
 - **Renamed to Nieto Crew.** The package is `@nieto-tech/nieto-crew`, the command is
   `nieto-crew`, and the server calls itself `nieto-crew`; register it under that name too
@@ -122,7 +132,8 @@ The 0.1.x series was developed privately. In summary:
   only restructure (no new file paths or evidence quotes); reformat turns logged to an owner-only
   file; up to two retries per task for malformed tool calls.
 
-[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.3.0...main
+[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.4.0...main
+[0.4.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Nieto-Tech/crew-mcp/releases/tag/v0.2.0

@@ -236,6 +236,7 @@ test("the server and its command are named nieto-crew; the tools keep their crew
   const pkg = JSON.parse(fs.readFileSync(path.join(here, "..", "package.json"), "utf8"));
   assert.equal(pkg.name, "@nieto-tech/nieto-crew");
   assert.deepEqual(pkg.bin, { "nieto-crew": "dist/index.js" });
+  assert.equal(c.getServerVersion()?.version, pkg.version, "VERSION in src/index.ts must match package.json");
   await c.close();
 });
 

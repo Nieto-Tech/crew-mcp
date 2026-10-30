@@ -122,9 +122,17 @@ environment variable that holds the key.
 
 ## Register with Claude Code
 
+From npm, no checkout needed:
+
+```bash
+claude mcp add --scope user nieto-crew -- npx -y @nieto-tech/nieto-crew
+claude mcp list
+```
+
+Or from a clone (see Install):
+
 ```bash
 claude mcp add --scope user nieto-crew -- node /absolute/path/to/nieto-crew/dist/index.js
-claude mcp list
 ```
 
 Register it as `nieto-crew`, not `crew`: the unrelated `crew-mcp` package on npm registers
