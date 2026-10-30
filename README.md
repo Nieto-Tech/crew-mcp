@@ -1,4 +1,4 @@
-# crew-mcp
+# Nieto Crew
 
 An MCP server that gives Claude Code a **crew**: a local GPU model and ChatGPT that
 Claude can send out to map code, review its changes, and give second opinions.
@@ -51,7 +51,7 @@ their own code. crew gives Claude a second and third pair of eyes:
 Requires Node 20+ and git.
 
 ```bash
-git clone <this repo> crew-mcp && cd crew-mcp
+git clone <this repo> nieto-crew && cd nieto-crew
 npm install
 npm test          # builds, then runs the end-to-end suite against fakes
 ```
@@ -123,9 +123,25 @@ environment variable that holds the key.
 ## Register with Claude Code
 
 ```bash
-claude mcp add --scope user crew -- node /absolute/path/to/crew-mcp/dist/index.js
+claude mcp add --scope user nieto-crew -- node /absolute/path/to/nieto-crew/dist/index.js
 claude mcp list
 ```
+
+Register it as `nieto-crew`, not `crew`: the unrelated `crew-mcp` package on npm registers
+itself as `crew`, and installing it would replace a server of that name. The tools are still
+called `crew_*`; Claude Code shows them as `mcp__nieto-crew__crew_recon` and so on.
+
+**Coming from the `crew` name?** Re-register, then update anything that names the server:
+
+```bash
+claude mcp remove --scope user crew
+claude mcp add --scope user nieto-crew -- node /absolute/path/to/nieto-crew/dist/index.js
+```
+
+Permission rules that match `mcp__crew__*` become `mcp__nieto-crew__*`, and a CLAUDE.md that
+says "MCP server: `crew`" should say `nieto-crew`. Your config (`~/.config/crew/config.json`),
+usage log and queue state (`~/.local/state/crew/`), `CREW_*` environment variables and
+`.crew.json` repo policies keep their names, so nothing else moves.
 
 User scope makes the crew available in every project. The VS Code extension uses
 Claude Code's configuration, so it picks this up too. Inside Claude Code, `/mcp`
@@ -155,7 +171,7 @@ instructions when it connects: when to recon, when to review, what quote-checked
 means, not to poll. It's versioned with the tools and only present when crew is.
 
 To confirm it's working, ask Claude in a fresh session: *"What instructions did the
-crew MCP server give you?"* It should describe the crew tools and when to use them.
+nieto-crew MCP server give you?"* It should describe the crew tools and when to use them.
 If it can't, your client isn't surfacing server instructions; paste
 `examples/CLAUDE.user.md` into your personal `~/.claude/CLAUDE.md` as a fallback.
 
@@ -321,10 +337,10 @@ If a repo can't send code to OpenAI, give it a `.crew.json` with `"cloud": false
 To hand it to someone without the source tree:
 
 ```bash
-npm pack                                   # creates nieto-tech-crew-mcp-<version>.tgz
+npm pack                                   # creates nieto-tech-nieto-crew-<version>.tgz
 # on their machine:
-npm i -g ./nieto-tech-crew-mcp-<version>.tgz
-claude mcp add --scope user crew -- crew-mcp
+npm i -g ./nieto-tech-nieto-crew-<version>.tgz
+claude mcp add --scope user nieto-crew -- nieto-crew
 ```
 
 ## How the checks work

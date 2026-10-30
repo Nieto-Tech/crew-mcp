@@ -20,7 +20,7 @@ import { formatStats, readUsage, recordReformat, recordUsage, todayLine, type Ou
 export const VERSION = "0.3.0";
 
 // Usage guidance travels with the server, so no CLAUDE.md snippet is needed.
-const server = new McpServer({ name: "crew", version: VERSION }, { instructions: CREW_INSTRUCTIONS });
+const server = new McpServer({ name: "nieto-crew", version: VERSION }, { instructions: CREW_INSTRUCTIONS });
 
 /* ---------- helpers ---------- */
 
