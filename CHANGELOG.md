@@ -6,6 +6,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-03
+
 ### Added
 - Second-opinion panels: with `roles.panel` set (or the new `workers` argument),
   `crew_second_opinion` asks every member at the same time and returns each answer
@@ -156,7 +158,8 @@ The 0.1.x series was developed privately. In summary:
   only restructure (no new file paths or evidence quotes); reformat turns logged to an owner-only
   file; up to two retries per task for malformed tool calls.
 
-[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.4.1...main
+[Unreleased]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.5.0...main
+[0.5.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Nieto-Tech/crew-mcp/compare/v0.2.1...v0.3.0
