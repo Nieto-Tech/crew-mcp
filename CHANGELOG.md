@@ -6,6 +6,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Second-opinion panels: with `roles.panel` set (or the new `workers` argument),
+  `crew_second_opinion` asks every member at the same time and returns each answer
+  separately, so ChatGPT and another model (Grok, say) are consulted in parallel instead
+  of one after the other. A member that is down or fails is reported; the rest still
+  answer. `cloud: false` repos ask only local members. `CREW_PANEL` overrides the panel;
+  `crew_status` shows it. `examples/config.panel.json` adds Grok through xAI's
+  OpenAI-compatible API.
+- `crew_second_opinion` `depth`: `quick` (6 turns, 60K characters, 150 s per worker) or
+  `deep` (each worker's own limits). Defaults to `deep` with `includeDiff`, `quick` without.
+
 ## [0.4.1] - 2026-10-30
 
 ### Changed

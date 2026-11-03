@@ -49,6 +49,11 @@ export interface CrewConfig {
     scout: string[];
     /** independent second opinion: ideally a different, strong model */
     reviewer: string[];
+    /**
+     * Optional. crew_second_opinion asks every worker here at the same time and returns each answer, instead of
+     * the first available reviewer. Unset (the default) keeps the reviewer chain.
+     */
+    panel?: string[];
   };
 }
 
@@ -95,6 +100,7 @@ function merge(base: CrewConfig, over: Partial<CrewConfig> | null): CrewConfig {
     roles: {
       scout: over.roles?.scout || base.roles.scout,
       reviewer: over.roles?.reviewer || base.roles.reviewer,
+      ...((over.roles?.panel || base.roles.panel) ? { panel: over.roles?.panel || base.roles.panel } : {}),
     },
   };
 }
@@ -133,7 +139,13 @@ export function loadConfig(): { config: CrewConfig; sources: string[] } {
   const list = (v: string) => v.split(",").map((s) => s.trim()).filter(Boolean);
   if (process.env.CREW_SCOUT) config.roles.scout = list(process.env.CREW_SCOUT);
   if (process.env.CREW_REVIEWER) config.roles.reviewer = list(process.env.CREW_REVIEWER);
-  if (["CREW_SCOUT", "CREW_REVIEWER", "CREW_OLLAMA_MODEL", "CREW_OLLAMA_URL", "CREW_NUM_CTX"].some((k) => process.env[k])) {
+  if (process.env.CREW_PANEL !== undefined) {
+    // CREW_PANEL="" switches a configured panel off for this server.
+    const p = list(process.env.CREW_PANEL);
+    if (p.length) config.roles.panel = p;
+    else delete config.roles.panel;
+  }
+  if (["CREW_SCOUT", "CREW_REVIEWER", "CREW_PANEL", "CREW_OLLAMA_MODEL", "CREW_OLLAMA_URL", "CREW_NUM_CTX"].some((k) => process.env[k])) {
     sources.push("env");
   }
 
@@ -142,23 +154,45 @@ export function loadConfig(): { config: CrewConfig; sources: string[] } {
       throw new Error(`Worker "${name}": thinkingParam must be "chat_template_kwargs" or "none" (got ${JSON.stringify(w.thinkingParam)})`);
     }
   }
-  for (const role of ["scout", "reviewer"] as const) {
-    for (const name of config.roles[role]) {
-      if (!config.workers[name]) throw new Error(`Role "${role}" references unknown worker "${name}"`);
+  if (config.roles.panel !== undefined && !Array.isArray(config.roles.panel)) {
+    throw new Error(`roles.panel must be a list of worker names (got ${JSON.stringify(config.roles.panel)})`);
+  }
+  // An empty panel is no panel: the reviewer chain answers, as with none configured.
+  if (config.roles.panel?.length === 0) delete config.roles.panel;
+  for (const role of ["scout", "reviewer", "panel"] as const) {
+    for (const name of config.roles[role] || []) {
+      if (!Object.hasOwn(config.workers, name)) throw new Error(`Role "${role}" references unknown worker "${name}"`);
     }
   }
   return { config, sources };
 }
 
-export function budgetsFor(w: WorkerConfig) {
+/** Ceilings a call puts on a worker's own limits; each only ever lowers them. */
+export interface Limits {
+  maxTurns?: number;
+  readBudgetChars?: number;
+  timeoutMs?: number;
+}
+
+/**
+ * crew_second_opinion depth="quick": answer from the prompt (and diff) with a short look around, not a full
+ * exploration. An API worker resends the whole conversation every turn, so turns cost time and tokens alike.
+ */
+export const QUICK_LIMITS: Limits = { maxTurns: 6, readBudgetChars: 60_000, timeoutMs: 150_000 };
+
+const cap = (v: number, c?: number) => (c === undefined ? v : Math.min(v, c));
+
+export function budgetsFor(w: WorkerConfig, limits?: Limits) {
   // ~1.8 chars per token of context leaves room for prompt, thinking and answer.
-  const readBudget =
-    w.readBudgetChars ?? (w.provider === "ollama" ? Math.round((w.numCtx || 32768) * 1.8) : 200_000);
+  const readBudget = cap(
+    w.readBudgetChars ?? (w.provider === "ollama" ? Math.round((w.numCtx || 32768) * 1.8) : 200_000),
+    limits?.readBudgetChars
+  );
   return {
     readBudget,
     perRead: Math.max(4_000, Math.min(16_000, Math.round(readBudget / 6))),
-    maxTurns: w.maxTurns ?? 16,
-    timeoutMs: w.timeoutMs ?? 300_000,
+    maxTurns: cap(w.maxTurns ?? 16, limits?.maxTurns),
+    timeoutMs: cap(w.timeoutMs ?? 300_000, limits?.timeoutMs),
     queueWaitMs: w.queueWaitMs ?? 600_000,
     reconYieldMs: w.reconYieldMs ?? 180_000,
     reconnectWaitMs: w.reconnectWaitMs ?? 30_000,

@@ -37,6 +37,24 @@ their own code. crew gives Claude a second and third pair of eyes:
 
 - `scout`: recon and diff review. Put your local GPU first.
 - `reviewer`: second opinions. Ideally a different strong model (ChatGPT).
+- `panel` (optional): workers that `crew_second_opinion` asks **all at the same time**,
+  instead of the first available reviewer. Each answer comes back separately, with its own
+  `_via …_` line and citation check, and Claude compares them. A member that is down or
+  fails is reported and the others still answer; there is no fallback between members.
+  Local members still take their turn on the GPU queue; cloud members run alongside.
+  Claude can also pick members for one call with the tool's `workers` argument.
+
+**Depth.** `crew_second_opinion` takes `depth`: `quick` caps every worker at 6 turns, 60K
+characters read and 150 s, for questions about a plan or design. `deep` uses each worker's own
+limits, for reviewing risky code. The default is `deep` with `includeDiff` and `quick`
+without it. An API worker resends the whole conversation every turn, so each turn costs time
+and tokens; set `maxTurns`, `readBudgetChars` and `timeoutMs` on it to bound `deep` too.
+
+**Adding Grok (or any other OpenAI-compatible cloud API)** is config only. Merge
+`examples/config.panel.json` into `~/.config/crew/config.json`, set `model` to an id from
+`GET https://api.x.ai/v1/models`, and export `XAI_API_KEY` where Claude Code starts crew.
+It counts as a cloud worker, so `cloud: false` repos never reach it. API calls are billed
+per token, unlike ChatGPT through your Codex login.
 
 **Worker providers:**
 
@@ -96,7 +114,8 @@ on your network. A private-address `baseUrl` still counts as local (see
 authentication.
 
 Quick overrides without editing the file: `CREW_OLLAMA_MODEL`, `CREW_OLLAMA_URL`,
-`CREW_NUM_CTX`, `CREW_SCOUT=local,chatgpt`, `CREW_REVIEWER=chatgpt`.
+`CREW_NUM_CTX`, `CREW_SCOUT=local,chatgpt`, `CREW_REVIEWER=chatgpt`,
+`CREW_PANEL=chatgpt,grok` (`CREW_PANEL=` with nothing switches a configured panel off).
 
 ### llama-server (llama.cpp)
 
@@ -216,7 +235,9 @@ With `cloud: false`:
 - Cloud workers are skipped entirely, **with no fallback**. If no local worker is up,
   the tool fails with an error naming the policy. It never quietly uses ChatGPT.
 - `crew_second_opinion` answers "disabled by repo policy (.crew.json)" without
-  calling anything, unless a local worker is in the `reviewer` chain.
+  calling anything, unless a local worker is in the `reviewer` chain. With a panel,
+  only its local members are asked; the cloud ones are listed as excluded and never
+  called, and a panel with no local member is disabled the same way.
 - `crew_status` shows the policy and which workers it excluded.
 - A `.crew.json` that is present but unreadable (bad JSON, `"cloud": "false"`) **fails
   closed**: treated as `cloud: false`, and the status and errors say why.

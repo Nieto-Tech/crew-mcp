@@ -19,7 +19,11 @@ your own context and to get independent checks. Claude stays the lead.
   words) so they aren't raised again. They come back collapsed to one line.
 - Risky changes (payments, auth, migrations, concurrency, data deletion): also call
   crew_second_opinion with includeDiff true and your reasoning. Weigh disagreement on
-  the merits; don't defer just because it disagrees.
+  the merits; don't defer just because it disagrees. If a panel is configured, one call
+  asks every member at once and returns each answer separately: compare them, and say
+  where they agree and where they differ. Don't call it once per model. It defaults to
+  depth "deep" with includeDiff and "quick" without; pass depth "quick" for a fast check of
+  a plan or design, "deep" only when the code itself needs a careful review.
 - Before presenting analysis with file:line references: run crew_check_citations
   and fix anything invalid.
 - Crew calls can take 1-2 minutes. That's expected; don't retry or poll. If a crew

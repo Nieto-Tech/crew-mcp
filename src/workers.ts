@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { budgetsFor, userConfigPath, type CrewConfig, type WorkerConfig } from "./config.js";
+import { budgetsFor, userConfigPath, type CrewConfig, type Limits, type WorkerConfig } from "./config.js";
 import { acquire } from "./lane.js";
 import { isLocalWorker, loadPolicy, policyReason, type Policy } from "./policy.js";
 import { ConnectionLostError, OllamaProvider, OpenAIProvider, diagLine, runAgent, secs, type AgentStats, type AnswerSpec, type FinalRetry, type Reformat, type ReformatDetail } from "./agent.js";
@@ -190,6 +190,8 @@ interface TaskOpts {
   tool?: string;
   /** The JSON the answer must be; agent workers get one reformat turn if the answer doesn't parse. */
   answer?: AnswerSpec;
+  /** Ceilings on the worker's own turns, read budget and timeout for this call (crew_second_opinion depth). */
+  limits?: Limits;
 }
 
 export async function runTask(opts: TaskOpts): Promise<TaskResult> {
@@ -218,8 +220,57 @@ export async function runTask(opts: TaskOpts): Promise<TaskResult> {
   }
 }
 
-async function runOn(opts: TaskOpts, { name, w, skipped }: { name: string; w: WorkerConfig; skipped: string[] }): Promise<TaskResult> {
-  const b = budgetsFor(w);
+export interface PanelAnswer {
+  name: string;
+  label: string;
+  result?: TaskResult;
+  /** Why this member gave no answer: unavailable, timed out, failed. */
+  error?: string;
+}
+
+export interface PanelResult {
+  answers: PanelAnswer[];
+  /** Members left out by repo policy (cloud workers under cloud:false): never checked, never called. */
+  excluded: string[];
+}
+
+/**
+ * Ask several workers the same thing at once and return every answer; Claude weighs them. No fallback between
+ * members: one that is down or fails is reported, the others still answer. Local members still take their turn on
+ * the machine-wide queue; cloud members run alongside them.
+ */
+export async function runPanel(opts: Omit<TaskOpts, "role">, names: string[]): Promise<PanelResult> {
+  // Load the policy here too, so no caller can reach a model without it being applied.
+  const policy = opts.policy ?? loadPolicy(opts.ws.root);
+  const excluded: string[] = [];
+  const members: string[] = [];
+  for (const name of [...new Set(names)]) {
+    // Own keys only: "toString" must not resolve to an inherited function and reach checkWorker.
+    const w = Object.hasOwn(opts.config.workers, name) ? opts.config.workers[name] : undefined;
+    if (!w) throw new Error(`Unknown worker "${name}". Configured workers: ${Object.keys(opts.config.workers).join(", ")}.`);
+    // cloud:false is absolute: a cloud member is never checked, never used.
+    if (!policy.cloud && !isLocalWorker(w)) excluded.push(name);
+    else members.push(name);
+  }
+  const answers = await Promise.all(
+    members.map(async (name): Promise<PanelAnswer> => {
+      const w = opts.config.workers[name];
+      const label = w.label || name;
+      try {
+        const a = await checkWorker(name, w);
+        if (!a.ok) return { name, label, error: `unavailable: ${a.detail}` };
+        const picked = a.model && a.model !== w.model ? { ...w, model: a.model } : w;
+        return { name, label, result: await runOn({ ...opts, policy, role: "reviewer" }, { name, w: picked, skipped: [] }) };
+      } catch (e: any) {
+        return { name, label, error: e?.message || String(e) };
+      }
+    })
+  );
+  return { answers, excluded };
+}
+
+async function runOn(opts: TaskOpts,{ name, w, skipped }: { name: string; w: WorkerConfig; skipped: string[] }): Promise<TaskResult> {
+  const b = budgetsFor(w, opts.limits);
 
   // Serialize local workers, across every crew process on this machine. The timeout clock starts only once we hold the worker.
   const queuedAt = Date.now();

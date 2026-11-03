@@ -171,6 +171,7 @@ before(async () => {
       two: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "test-model", maxTurns: 2 },
       thinky: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "test-model", maxTurns: 2, thinkOnTools: true, numPredictTools: 111, numPredictFinal: 222 },
       drip: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "drip-model", timeoutMs: 6000 },
+      deepdrip: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "drip-model", maxTurns: 12, timeoutMs: 30000 },
       gate: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "gate-model", timeoutMs: 1000 },
       gateq: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "gate-model", timeoutMs: 1000, queueWaitMs: 200 },
       gateage: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "gate-model", timeoutMs: 1000, reconYieldMs: 100 },
@@ -194,6 +195,9 @@ before(async () => {
       trunc: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "trunc-model" },
       redirect: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "redirect-model" },
       chatgpt: { provider: "codex-cli", codexPath: fakeCodex },
+      panelA: { provider: "codex-cli", codexPath: fakeCodex, label: "Panel A", model: "slow-1200" },
+      panelB: { provider: "codex-cli", codexPath: fakeCodex, label: "Panel B", model: "slow-1200" },
+      panelFail: { provider: "codex-cli", codexPath: fakeCodex, label: "Panel Fail", model: "fail" },
     },
     roles: { scout: ["local", "chatgpt"], reviewer: ["chatgpt"] },
   }));
@@ -484,6 +488,145 @@ test("policy malformed .crew.json fails closed and says so", async () => {
   const c2 = await connect();
   assert.match(await call(c2, "crew_status", { workspace: dir2 }), /FAILING CLOSED/);
   await c2.close();
+});
+
+/* ---------- second opinion panel ---------- */
+
+const timesFile = () => path.join(os.tmpdir(), `crew-codex-times-${process.pid}-${Math.random().toString(36).slice(2)}`);
+
+test("a panel asks every member at the same time and returns each answer separately", async () => {
+  const times = timesFile();
+  const c = await connect({ CREW_PANEL: "panelA,panelB", CODEX_TIMES: times });
+  const out = await call(c, "crew_second_opinion", { subject: "Is chargeInvoice safe?" });
+  assert.match(out, /Panel: 2 of 2 answered, asked in parallel/);
+  assert.match(out, /## Panel A \(panelA\)\n\n_via Panel A \(slow-1200\)/);
+  assert.match(out, /## Panel B \(panelB\)\n\n_via Panel B \(slow-1200\)/);
+  assert.equal(out.match(/## Verdict \(slow-1200\)/g)?.length, 2, "both answers are in the output");
+  assert.equal(out.match(/Citation check: 1\/2/g)?.length, 2, "each answer's citations are checked");
+  // Both calls started before either finished: they overlapped, not one after the other.
+  const marks = fs.readFileSync(times, "utf8").trim().split("\n").map((l) => l.split(" "));
+  const runs = marks.filter((m) => m[1] === "slow-1200");
+  const starts = runs.filter((m) => m[0] === "start").map((m) => Number(m[2]));
+  const ends = runs.filter((m) => m[0] === "end").map((m) => Number(m[2]));
+  assert.equal(starts.length, 2);
+  assert.equal(ends.length, 2);
+  assert.ok(Math.max(...starts) < Math.min(...ends), `calls overlapped: starts ${starts}, ends ${ends}`);
+  await c.close();
+});
+
+test("a panel member that fails or is down is reported, and the others still answer", async () => {
+  const c = await connect({ CREW_PANEL: "panelA,panelFail,nope" });
+  const r = await c.callTool({ name: "crew_second_opinion", arguments: { subject: "Is chargeInvoice safe?" } });
+  assert.notEqual(r.isError, true);
+  const out = r.content[0].text;
+  assert.match(out, /Panel: 1 of 3 answered/);
+  assert.match(out, /## Verdict \(slow-1200\)/);
+  assert.match(out, /## Panel Fail \(panelFail\): no answer/);
+  assert.match(out, /## nope \(nope\): no answer\n\nunavailable: model "not-pulled" not pulled/);
+  await c.close();
+});
+
+test("a panel where nobody answers is an error that lists each reason", async () => {
+  const c = await connect({ CREW_PANEL: "panelFail,nope" });
+  const r = await c.callTool({ name: "crew_second_opinion", arguments: { subject: "x" } });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /no panel member answered[\s\S]*Panel Fail[\s\S]*not pulled/);
+  await c.close();
+});
+
+test("workers picks the members for one call; an unknown name fails before anything is called", async () => {
+  const calls = codexCalls();
+  const c = await connect({ CODEX_CALLS: calls });
+  const bad = await c.callTool({ name: "crew_second_opinion", arguments: { subject: "x", workers: ["panelA", "ghost"] } });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /Unknown worker "ghost"/);
+  // A name that is only an inherited property of a plain object is unknown too, not a function to "check".
+  const inherited = await c.callTool({ name: "crew_second_opinion", arguments: { subject: "x", workers: ["toString"] } });
+  assert.equal(inherited.isError, true);
+  assert.match(inherited.content[0].text, /Unknown worker "toString"/);
+  // "Exactly these workers" with none named is refused, not read as "the default".
+  const empty = await c.callTool({ name: "crew_second_opinion", arguments: { subject: "x", workers: [] } });
+  assert.equal(empty.isError, true);
+  assert.ok(!fs.existsSync(calls), "nothing may run when a name is wrong");
+  const out = await call(c, "crew_second_opinion", { subject: "x", workers: ["panelB"] });
+  assert.match(out, /Panel: 1 of 1 answered/);
+  assert.match(out, /## Panel B \(panelB\)/);
+  assert.doesNotMatch(out, /Panel A/);
+  await c.close();
+  // A panel in config naming a worker that doesn't exist is a config error.
+  const c2 = await connect({ CREW_PANEL: "ghost" });
+  const st = await c2.callTool({ name: "crew_status", arguments: {} });
+  assert.equal(st.isError, true);
+  assert.match(st.content[0].text, /Role "panel" references unknown worker "ghost"/);
+  await c2.close();
+  const c3 = await connect({ CREW_PANEL: "toString" });
+  assert.match((await c3.callTool({ name: "crew_status", arguments: {} })).content[0].text, /unknown worker "toString"/);
+  await c3.close();
+});
+
+test("a panel set in config is used by default, and CREW_PANEL= with nothing switches it off", async () => {
+  const withPanel = path.join(repo, "..", `crew-test-${port}-panel.json`);
+  const cfg = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+  fs.writeFileSync(withPanel, JSON.stringify({ ...cfg, roles: { ...cfg.roles, panel: ["panelA", "panelB"] } }));
+  const on = await connect({ CREW_CONFIG: withPanel });
+  assert.match(await call(on, "crew_second_opinion", { subject: "x" }), /Panel: 2 of 2 answered/);
+  assert.match(await call(on, "crew_status", {}), /\*\*panel\*\* \(crew_second_opinion asks all at once\) → panelA, panelB/);
+  await on.close();
+  const off = await connect({ CREW_CONFIG: withPanel, CREW_PANEL: "" });
+  const out = await call(off, "crew_second_opinion", { subject: "x" });
+  assert.doesNotMatch(out, /Panel:/);
+  assert.match(out, /^_via ChatGPT \(Codex CLI\)/, "the reviewer chain answers");
+  assert.doesNotMatch(await call(off, "crew_status", {}), /\*\*panel\*\*/);
+  await off.close();
+});
+
+test("second opinion depth: quick caps a worker's turns, deep uses its own; the default follows includeDiff", async () => {
+  const c = await connect();
+  const turns = (out) => Number((out.match(/· (\d+) turns? ·/) || [])[1]);
+  // drip-model wants another tool call on every turn, so it explores until its turn limit.
+  const quick = await call(c, "crew_second_opinion", { subject: "x", workers: ["deepdrip"] });
+  assert.match(quick, /asked in parallel \(quick\)/);
+  assert.ok(turns(quick) <= 7, `quick stops near 6 turns: ${quick.slice(0, 200)}`);
+  const deep = await call(c, "crew_second_opinion", { subject: "x", workers: ["deepdrip"], depth: "deep" });
+  assert.match(deep, /asked in parallel \(deep\)/);
+  assert.ok(turns(deep) > 7, `deep runs to the worker's own 12: ${deep.slice(0, 200)}`);
+  const withDiff = await call(c, "crew_second_opinion", { subject: "x", workers: ["deepdrip"], includeDiff: true });
+  assert.match(withDiff, /asked in parallel \(deep\)/, "includeDiff defaults to deep");
+  await c.close();
+});
+
+test("local panel members still take turns on the machine-wide queue; they never run at once", async () => {
+  const c = await connect({ CREW_PANEL: "gate,gateage" }); // two workers on one local server, ~600ms each
+  gateMax = 0;
+  const out = await call(c, "crew_second_opinion", { subject: "is this safe?" });
+  assert.match(out, /Panel: 2 of 2 answered/);
+  assert.equal(gateMax, 1, "never two in flight on one local server");
+  assert.match(out, /queued 0\.\ds/, "the second waited its turn");
+  await c.close();
+});
+
+test("policy cloud:false: a panel asks only its local members and never calls the cloud ones", async () => {
+  const dir = policyRepo('{ "cloud": false }');
+  const calls = codexCalls();
+  const c = await connect({ CREW_PANEL: "local,panelA", CODEX_CALLS: calls });
+  const out = await call(c, "crew_second_opinion", { subject: "is this safe?", workspace: dir });
+  assert.match(out, /Panel: 1 of 1 answered/);
+  assert.match(out, /Excluded by repo policy \(cloud workers, never called\): panelA/);
+  assert.match(out, /_via Local GPU/);
+  const st = await call(c, "crew_status", { workspace: dir });
+  assert.match(st, /\*\*panel\*\* \(crew_second_opinion asks all at once\) → local · excluded by repo policy: panelA/);
+  assert.ok(!fs.existsSync(calls), "codex must not run, not even --version");
+  await c.close();
+});
+
+test("policy cloud:false: a panel of only cloud workers is disabled and calls nothing", async () => {
+  const dir = policyRepo('{ "cloud": false }');
+  const calls = codexCalls();
+  const c = await connect({ CODEX_CALLS: calls });
+  const out = await call(c, "crew_second_opinion", { subject: "is this safe?", workers: ["panelA", "panelB"], workspace: dir });
+  assert.match(out, /disabled by repo policy \(\.crew\.json\).*no local panel member/);
+  assert.ok(!fs.existsSync(calls));
+  await c.close();
 });
 
 test("status shows the policy and the workers it excluded", async () => {
