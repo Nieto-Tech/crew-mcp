@@ -17,6 +17,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `crew_second_opinion` `depth`: `quick` (6 turns, 60K characters, 150 s per worker) or
   `deep` (each worker's own limits). Defaults to `deep` with `includeDiff`, `quick` without.
 
+### Fixed
+- The Ollama health check (`/api/tags`) now refuses HTTP redirects, like every model request
+  already did. A local endpoint could redirect it to another server, even under `cloud: false`.
+  Only a bare GET with no repo content could leave. `crew_status` now says the worker answered
+  with a redirect.
+
 ## [0.4.1] - 2026-10-30
 
 ### Changed

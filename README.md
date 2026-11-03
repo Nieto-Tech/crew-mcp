@@ -245,7 +245,8 @@ With `cloud: false`:
 - crew looks for `.crew.json` from the workspace up to the git root, so working in
   `repo/src` still finds `repo/.crew.json`. The strictest file wins; a nested
   `cloud: true` can't loosen a parent's `cloud: false`. A dangling symlink fails closed.
-- Model requests refuse HTTP redirects, so a local endpoint can't bounce a prompt elsewhere.
+- Every request crew makes, model calls and health checks alike, refuses HTTP redirects, so
+  a local endpoint can't bounce anything elsewhere.
 - **What "local" means:** the worker's `baseUrl` host is loopback or a private address.
   crew trusts that endpoint. A LAN proxy that forwards to a cloud model would pass the
   check; only network egress rules can prevent that. Mapped loopback (`::ffff:127.0.0.1`)

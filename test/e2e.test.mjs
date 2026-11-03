@@ -17,7 +17,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serverJs = path.join(here, "..", "dist", "index.js");
 const fakeCodex = path.join(here, "fixtures", "fake-codex.mjs");
 
-let ollama, port, repo, cfgFile, requests = [], leaks = 0, gateInflight = 0, gateMax = 0, gateOrder = [];
+let ollama, port, repo, cfgFile, requests = [], leaks = 0, tagLeaks = 0, gateInflight = 0, gateMax = 0, gateOrder = [];
 let malformedPlan = []; // plan-model: true = answer this request with a tool-call parse error
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -61,6 +61,9 @@ const PROSE_FINDING = { severity: "high", category: "data-integrity", file: "src
 
 before(async () => {
   ollama = http.createServer(async (req, res) => {
+    // A "local" endpoint whose health check bounces elsewhere; /tagleak stands in for a public server.
+    if (req.url === "/bounce/api/tags") { res.statusCode = 307; res.setHeader("location", `http://127.0.0.1:${port}/tagleak`); res.end(); return; }
+    if (req.url === "/tagleak") { tagLeaks++; res.end(JSON.stringify({ models: [{ name: "test-model:latest" }] })); return; }
     if (req.url === "/api/tags") { res.end(JSON.stringify({ models: [{ name: "test-model:latest" }, { name: "slow-model:latest" }, { name: "drip-model:latest" }, { name: "gate-model:latest" }, { name: "redirect-model:latest" }, { name: "trunc-model:latest" }, { name: "emptythink-model:latest" }, { name: "alwaysempty-model:latest" }, { name: "cutoff-model:latest" }, { name: "malformed-model:latest" }, { name: "badtool-model:latest" }, { name: "crash-model:latest" }, { name: "tagcase-model:Q4_K_M" }, { name: "prose-model:latest" }, { name: "proseonly-model:latest" }, { name: "proseerr-model:latest" }, { name: "invent-model:latest" }, { name: "plan-model:latest" }, { name: "lead-model:latest" }, { name: "leadonly-model:latest" }] })); return; }
     let b = ""; for await (const c of req) b += c;
     if (req.url === "/leak") { leaks++; res.end("{}"); return; } // a redirected prompt would land here
@@ -194,6 +197,7 @@ before(async () => {
       proseerr: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "proseerr-model", maxTurns: 2 },
       trunc: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "trunc-model" },
       redirect: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}`, model: "redirect-model" },
+      bounce: { provider: "ollama", baseUrl: `http://127.0.0.1:${port}/bounce`, model: "test-model" },
       chatgpt: { provider: "codex-cli", codexPath: fakeCodex },
       panelA: { provider: "codex-cli", codexPath: fakeCodex, label: "Panel A", model: "slow-1200" },
       panelB: { provider: "codex-cli", codexPath: fakeCodex, label: "Panel B", model: "slow-1200" },
@@ -967,6 +971,18 @@ test("a redirect from a local endpoint is refused and the prompt goes nowhere el
   const r = await c.callTool({ name: "crew_recon", arguments: { question: "map charging" } });
   assert.equal(r.isError, true);
   assert.equal(leaks, 0);
+  await c.close();
+});
+
+test("the Ollama health check refuses a redirect too: nothing reaches where it points", async () => {
+  const dir = policyRepo('{ "cloud": false }');
+  const c = await connect({ CREW_SCOUT: "bounce" });
+  tagLeaks = 0;
+  const st = await call(c, "crew_status", { workspace: dir });
+  assert.match(st, /❌ \*\*bounce\*\* \(ollama\): Ollama at http:\/\/127\.0\.0\.1:\d+\/bounce answered with a redirect, which crew never follows/);
+  const r = await c.callTool({ name: "crew_recon", arguments: { question: "map charging", workspace: dir } });
+  assert.equal(r.isError, true, "a worker whose health check redirects is not available");
+  assert.equal(tagLeaks, 0, "the redirect target was never contacted");
   await c.close();
 });
 

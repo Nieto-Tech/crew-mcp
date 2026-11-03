@@ -42,7 +42,8 @@ export async function checkWorker(name: string, w: WorkerConfig): Promise<Availa
     if (w.provider === "ollama") {
       const base = (w.baseUrl || "http://localhost:11434").replace(/\/$/, "");
       // The body is inside the timeout too: a server stalling mid-restart must not hang the reconnect wait.
-      const data: any = await withTimeout(fetch(`${base}/api/tags`).then((res) => res.json()), 2_500);
+      // No redirects, as for model requests: a local endpoint must not bounce even a health check elsewhere.
+      const data: any = await withTimeout(fetch(`${base}/api/tags`, { redirect: "error" }).then((res) => res.json()), 2_500);
       const names: string[] = (data.models || []).map((m: any) => m.name);
       const want = w.model || "";
       const found = findModel(names, want);
@@ -78,6 +79,8 @@ export async function checkWorker(name: string, w: WorkerConfig): Promise<Availa
     }
   } catch (e: any) {
     if (e?.code === "ENOENT") a = { ok: false, detail: "codex CLI not installed (npm i -g @openai/codex, then codex login)" };
+    else if (w.provider === "ollama" && /redirect/i.test(e?.cause?.message || ""))
+      a = { ok: false, detail: `Ollama at ${w.baseUrl} answered with a redirect, which crew never follows; point baseUrl at the server itself` };
     else if (w.provider === "ollama") a = { ok: false, detail: `Ollama not reachable at ${w.baseUrl || "http://localhost:11434"} (${e.message})` };
     else a = { ok: false, detail: e.message };
   }
