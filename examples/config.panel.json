@@ -1,0 +1,18 @@
+{
+  "workers": {
+    "grok": {
+      "provider": "openai",
+      "label": "Grok (xAI)",
+      "baseUrl": "https://api.x.ai/v1",
+      "apiKeyEnv": "XAI_API_KEY",
+      "model": "your-grok-model-id",
+      "maxTurns": 10,
+      "readBudgetChars": 100000,
+      "timeoutMs": 300000
+    }
+  },
+  "roles": {
+    "reviewer": ["chatgpt", "grok"],
+    "panel": ["chatgpt", "grok"]
+  }
+}

@@ -3,8 +3,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import path from "node:path";
 import { z } from "zod";
-import { budgetsFor, loadConfig, userConfigPath } from "./config.js";
-import { checkWorker, resolveRole, runTask, type TaskResult } from "./workers.js";
+import { QUICK_LIMITS, budgetsFor, loadConfig, userConfigPath } from "./config.js";
+import { checkWorker, resolveRole, runPanel, runTask, type TaskResult } from "./workers.js";
 import { queueLine } from "./lane.js";
 import { Workspace } from "./workspace.js";
 import { bySeverity, checkCitations, extractJson, splitAcknowledged, triageFindings, verifyFindings, type Finding } from "./checks.js";
@@ -156,6 +156,14 @@ server.registerTool(
         } catch {
           lines.push(`- **${role}** → ❌ nothing available${policy.cloud ? "" : " (local only, per repo policy)"} · chain: ${config.roles[role].join(" → ")}`);
         }
+      }
+      if (config.roles.panel) {
+        const asked = config.roles.panel.filter((n) => policy.cloud || isLocalWorker(config.workers[n]));
+        const left = config.roles.panel.filter((n) => !asked.includes(n));
+        lines.push(
+          `- **panel** (crew_second_opinion asks all at once) → ${asked.length ? asked.join(", ") : "❌ none allowed"}` +
+            `${left.length ? ` · excluded by repo policy: ${left.join(", ")}` : ""}`
+        );
       }
       return text(lines.join("\n"));
     } catch (e) {
@@ -371,24 +379,41 @@ server.registerTool(
   {
     title: "Crew second opinion",
     description:
-      "Ask an independent reviewer (ChatGPT by default) to critique a plan, a design, or the current diff. Use it for risky work: payments, auth, migrations, concurrency. Expect disagreement; weigh it, don't just accept it.",
+      "Ask an independent reviewer (ChatGPT by default) to critique a plan, a design, or the current diff. Use it for risky work: payments, auth, migrations, concurrency. Expect disagreement; weigh it, don't just accept it. " +
+      "If a panel is configured (or `workers` is given), every member is asked at the same time and each answer comes back separately: compare them yourself.",
     inputSchema: {
       subject: z.string().describe("The plan, design or question to review. Include your reasoning."),
       includeDiff: z.boolean().optional().describe("Attach the current working-tree diff"),
       base: z.string().optional().describe("Git ref for the diff (default HEAD)"),
       files: z.array(z.string()).optional().describe("Files the reviewer should look at"),
+      workers: z
+        .array(z.string())
+        .min(1)
+        .optional()
+        .describe("Ask exactly these workers (names from crew_status), all at once. Default: the configured panel, else the reviewer chain."),
+      depth: z
+        .enum(["quick", "deep"])
+        .optional()
+        .describe(
+          "quick: a short look around, then answer (a few turns, about 2 minutes at most). deep: each worker's full limits, for reviewing risky code. Default: deep with includeDiff, quick without."
+        ),
       workspace: workspaceArg,
     },
     annotations: { readOnlyHint: true },
   },
-  async ({ subject, includeDiff, base, files, workspace }, extra) => {
+  async ({ subject, includeDiff, base, files, workers, depth, workspace }, extra) => {
     try {
       const { config } = loadConfig();
       const ws = await openWorkspace(workspace);
       const policy = loadPolicy(ws.root);
-      if (!policy.cloud && !config.roles.reviewer.some((n) => isLocalWorker(config.workers[n]))) {
+      const panel = workers || config.roles.panel;
+      const candidates = panel || config.roles.reviewer;
+      for (const n of candidates) {
+        if (!Object.hasOwn(config.workers, n)) throw new Error(`Unknown worker "${n}". Configured workers: ${Object.keys(config.workers).join(", ")}.`);
+      }
+      if (!policy.cloud && !candidates.some((n) => isLocalWorker(config.workers[n]))) {
         return text(
-          `crew_second_opinion is disabled by repo policy (${POLICY_FILE}): cloud workers are not allowed here and no local reviewer is configured.` +
+          `crew_second_opinion is disabled by repo policy (${POLICY_FILE}): cloud workers are not allowed here and no local ${panel ? "panel member" : "reviewer"} is configured.` +
             `${policy.source === "malformed" ? ` (${POLICY_FILE} is unreadable, so crew is failing closed: ${policy.problem})` : ""} Nothing was sent anywhere.`
         );
       }
@@ -397,24 +422,50 @@ server.registerTool(
         const d = await ws.diff(base || "HEAD", [], { includeUntracked: true });
         diff = d.diff.length > 150_000 ? d.diff.slice(0, 150_000) + "\n[TRUNCATED]" : d.diff;
       }
-      const r = await runTask({
+      const task = {
         config,
-        role: "reviewer",
         tool: "crew_second_opinion",
         ws,
+        policy,
         system: SYSTEM(ws.root),
         prompt: secondOpinionPrompt(subject, diff, files || []),
         onProgress: progressFor(extra as Extra),
-      });
-      logCall(r, "crew_second_opinion", ws, r.partial ? "partial" : "ok");
-      const cites = await checkCitations(ws, r.text);
-      const bad = cites.results.filter((c) => !c.ok);
-      const footer = cites.total
-        ? `\n\n_Citation check: ${cites.total - bad.length}/${cites.total} file:line references valid${
-            bad.length ? `; invalid: ${bad.slice(0, 5).map((c) => `${c.citation} (${c.reason})`).join(", ")}` : ""
-          }_`
-        : "";
-      return text(`${via(r)}\n\n${r.text}${footer}`);
+        limits: (depth || (includeDiff ? "deep" : "quick")) === "quick" ? QUICK_LIMITS : undefined,
+      };
+      const citationFooter = async (answer: string) => {
+        const cites = await checkCitations(ws, answer);
+        const bad = cites.results.filter((c) => !c.ok);
+        return cites.total
+          ? `\n\n_Citation check: ${cites.total - bad.length}/${cites.total} file:line references valid${
+              bad.length ? `; invalid: ${bad.slice(0, 5).map((c) => `${c.citation} (${c.reason})`).join(", ")}` : ""
+            }_`
+          : "";
+      };
+
+      if (!panel) {
+        const r = await runTask({ ...task, role: "reviewer" });
+        logCall(r, "crew_second_opinion", ws, r.partial ? "partial" : "ok");
+        return text(`${via(r)}\n\n${r.text}${await citationFooter(r.text)}`);
+      }
+
+      const { answers, excluded } = await runPanel(task, panel);
+      const ok = answers.filter((a) => a.result);
+      const head = [
+        `**Panel: ${ok.length} of ${answers.length} answered, asked in parallel (${task.limits ? "quick" : "deep"}).** Each answer below is independent; compare them.`,
+      ];
+      if (excluded.length) head.push(`_Excluded by repo policy (cloud workers, never called): ${excluded.join(", ")}_`);
+      const sections: string[] = [];
+      for (const a of answers) {
+        if (!a.result) {
+          sections.push(`## ${a.label} (${a.name}): no answer\n\n${a.error}`);
+          continue;
+        }
+        const r = a.result;
+        logCall(r, "crew_second_opinion", ws, r.partial ? "partial" : "ok");
+        sections.push(`## ${a.label} (${a.name})\n\n${via(r)}\n\n${r.text}${await citationFooter(r.text)}`);
+      }
+      const body = `${head.join("\n")}\n\n${sections.join("\n\n---\n\n")}`;
+      return ok.length ? text(body) : { ...text(`crew error: no panel member answered.\n\n${body}`), isError: true };
     } catch (e) {
       return fail(e);
     }

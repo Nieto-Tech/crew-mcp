@@ -16,7 +16,8 @@ isn't connected.
   exists where claimed; it doesn't prove the claim. *Unverified* findings are hints.
 - **Risky changes** (payments, auth, migrations, concurrency, data deletion): also
   call `crew_second_opinion` with `includeDiff: true` and your reasoning. Weigh
-  disagreement on the merits; don't defer just because it disagrees.
+  disagreement on the merits; don't defer just because it disagrees. With a panel
+  configured, one call asks every member at once: compare the answers, don't call per model.
 - **Before presenting analysis with file:line references:** run
   `crew_check_citations` and fix anything invalid.
 - Crew calls can take 1–2 minutes. That's expected; don't retry or poll. If a crew
