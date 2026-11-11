@@ -272,6 +272,20 @@ export async function runPanel(opts: Omit<TaskOpts, "role">, names: string[]): P
   return { answers, excluded };
 }
 
+/**
+ * The fix to suggest when a worker times out. When the call's limits (crew_second_opinion depth "quick") set the
+ * time, the worker's own timeoutMs never applied, so raising it in the config changes nothing.
+ */
+export function timeoutFix(name: string, w: WorkerConfig, limits?: Limits): string {
+  const capped = budgetsFor(w, limits).timeoutMs;
+  const own = budgetsFor(w).timeoutMs;
+  if (capped < own) {
+    return `Fix: depth "quick" caps every worker at ${secs(capped)}s, below "${name}"'s own ${secs(own)}s, so its config doesn't apply here. ` +
+      `Ask for depth "deep", or narrow the request with \`paths\`.`;
+  }
+  return `Fix: narrow the request with \`paths\`, or raise timeoutMs for "${name}" in ${userConfigPath()}.`;
+}
+
 async function runOn(opts: TaskOpts,{ name, w, skipped }: { name: string; w: WorkerConfig; skipped: string[] }): Promise<TaskResult> {
   const b = budgetsFor(w, opts.limits);
 
@@ -386,11 +400,10 @@ async function runOn(opts: TaskOpts,{ name, w, skipped }: { name: string; w: Wor
       outcome: (ac.signal.aborted ? "timeout" : "error") satisfies Outcome,
     });
     if (ac.signal.aborted) {
-      const secs = b.timeoutMs < 10_000 ? (b.timeoutMs / 1000).toFixed(1) : Math.round(b.timeoutMs / 1000);
       throw new Error(
-        `Worker "${name}" (${w.label || w.model || w.provider}) timed out after ${secs}s` +
+        `Worker "${name}" (${w.label || w.model || w.provider}) timed out after ${secs(b.timeoutMs)}s` +
           `${w.provider === "codex-cli" ? "" : ` (${diagLine(stats, queuedMs)})`}. ` +
-          `Fix: narrow the request with \`paths\`, or raise timeoutMs for "${name}" in ${userConfigPath()}.`
+          timeoutFix(name, w, opts.limits)
       );
     }
     if (e instanceof ConnectionLostError) {
