@@ -277,6 +277,8 @@ time out.
 
 When a worker times out, the error names the worker and how long it ran, and says to
 narrow with `paths` or raise `timeoutMs` for that worker in `~/.config/crew/config.json`.
+When `depth: "quick"` set the time (its 150 s is below the worker's own `timeoutMs`), raising
+`timeoutMs` changes nothing, so the error says to ask for `depth: "deep"` instead.
 
 ## Reliability
 

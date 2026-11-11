@@ -6,6 +6,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- A worker that times out under `crew_second_opinion` `depth: "quick"` no longer says to
+  raise its `timeoutMs` in the config. Quick depth's 150 s cap overrides that setting, so the
+  error now says the cap applied and to ask for `depth: "deep"`.
+
 ## [0.5.0] - 2026-11-03
 
 ### Added
