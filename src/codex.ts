@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -62,4 +63,31 @@ export async function runCodex(opts: {
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+const VERSION_DIR = /^v?\d+\.\d+\.\d+$/;
+
+/**
+ * Codex installs under nvm's Node versions. nvm gives each Node version its own global packages, so
+ * after a Node upgrade `codex` is still on disk but no longer on PATH. Newest version first.
+ * (nvm-windows keeps versions in another layout, so this finds nothing there.)
+ */
+export function codexUnderNodeVersions(env: NodeJS.ProcessEnv = process.env): { version: string; file: string }[] {
+  const root = path.join(env.NVM_DIR || path.join(os.homedir(), ".nvm"), "versions", "node");
+  let versions: string[];
+  try {
+    versions = fsSync.readdirSync(root).filter((v) => VERSION_DIR.test(v));
+  } catch {
+    return [];
+  }
+  const num = (v: string) => v.replace(/^v/, "").split(".").map(Number);
+  return versions
+    .flatMap((version) => {
+      const file = path.join(root, version, "bin", "codex");
+      return fsSync.existsSync(file) ? [{ version, file }] : [];
+    })
+    .sort((a, b) => {
+      const x = num(a.version), y = num(b.version);
+      return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+    });
 }

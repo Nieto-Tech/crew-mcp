@@ -411,7 +411,14 @@ claude mcp add --scope user nieto-crew -- nieto-crew
 
 - **`❌ local (ollama): model "…" not pulled`** in `crew_status`: run `ollama pull <model>`, or
   fix `model` in your config. The line lists the closest installed names.
-- **`codex CLI not found`:** `npm i -g @openai/codex`, then `codex login`.
+- **`codex CLI not installed`:** `npm i -g @openai/codex`, then `codex login`.
+- **`codex CLI not on PATH: it is installed only under other Node versions`:** you moved to a
+  new Node with nvm, and nvm keeps global npm packages per Node version. Run
+  `npm i -g @openai/codex` with the Node version the line names. Codex's login in `~/.codex` is
+  kept, so you don't need to log in again. To have nvm carry Codex over on future installs, add
+  `@openai/codex` to `$NVM_DIR/default-packages`.
+- **`codex … is installed but not logged in`:** run `codex login` in a terminal. crew uses
+  Codex's own login and has no key of its own for ChatGPT.
 - **Recon comes back unstructured:** the model didn't return JSON, even after the reformat
   turn. The raw answer is shown. Usually this means the model is too small for the job; use
   ChatGPT as scout.

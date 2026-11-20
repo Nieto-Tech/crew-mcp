@@ -351,6 +351,55 @@ test("on Windows, codex installed as a .cmd shim runs, found on PATH or by path,
   assert.ok(!fs.existsSync(path.join(dir, "pwned.txt")), "nothing in an argument ran as a command through cmd.exe");
 });
 
+test("codex missing from PATH but installed under other nvm Node versions: status names them and the fix, not 'not installed'", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "crew-nvm-"));
+  const emptyPath = path.join(dir, "empty-path");
+  fs.mkdirSync(emptyPath);
+  const nvm = path.join(dir, "nvm");
+  for (const v of ["v1.2.3", "v1.10.0"]) {
+    const bin = path.join(nvm, "versions", "node", v, "bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.copyFileSync(fakeCodex, path.join(bin, "codex"));
+  }
+  fs.mkdirSync(path.join(nvm, "versions", "node", "v9.9.9", "bin"), { recursive: true }); // a Node with no codex
+  const cfg = path.join(dir, "cfg.json");
+  fs.writeFileSync(cfg, JSON.stringify({ workers: { chatgpt: { provider: "codex-cli" } }, roles: { scout: ["chatgpt"], reviewer: ["chatgpt"] } }));
+  const c = await connect({ CREW_CONFIG: cfg, PATH: emptyPath, NVM_DIR: nvm });
+  const out = await call(c, "crew_status", {});
+  assert.match(out, /❌ \*\*chatgpt\*\* \(codex-cli\): codex CLI not on PATH: it is installed only under other Node versions \(v1\.10\.0, v1\.2\.3\)/);
+  assert.ok(out.includes(`Run \`npm i -g @openai/codex\` with Node ${process.version}, the one crew runs on`), out);
+  assert.match(out, /no need to log in again/);
+  assert.ok(out.includes(`set codexPath to ${path.join(nvm, "versions", "node", "v1.10.0", "bin", "codex")}`), out);
+  // With no codex under nvm either, it is plainly not installed.
+  const c2 = await connect({ CREW_CONFIG: cfg, PATH: emptyPath, NVM_DIR: path.join(dir, "no-nvm") });
+  assert.match(await call(c2, "crew_status", {}), /❌ \*\*chatgpt\*\* \(codex-cli\): codex CLI not installed \(npm i -g @openai\/codex, then codex login\)/);
+  // Installed for the very Node crew runs on, but its directory isn't on PATH: point at the file.
+  const mineBin = path.join(nvm, "versions", "node", process.version, "bin");
+  fs.mkdirSync(mineBin, { recursive: true });
+  fs.copyFileSync(fakeCodex, path.join(mineBin, "codex"));
+  const c3 = await connect({ CREW_CONFIG: cfg, PATH: emptyPath, NVM_DIR: nvm });
+  assert.ok((await call(c3, "crew_status", {})).includes(`codex is installed for Node ${process.version} (${path.join(mineBin, "codex")}) but that directory isn't on crew's PATH: set codexPath to`));
+  // An explicit codexPath that doesn't exist says so.
+  const bad = path.join(dir, "no-such-codex");
+  const cfgBad = path.join(dir, "cfg-bad.json");
+  fs.writeFileSync(cfgBad, JSON.stringify({ workers: { chatgpt: { provider: "codex-cli", codexPath: bad } }, roles: { scout: ["chatgpt"], reviewer: ["chatgpt"] } }));
+  const c4 = await connect({ CREW_CONFIG: cfgBad, NVM_DIR: nvm });
+  assert.ok((await call(c4, "crew_status", {})).includes(`codex CLI not found at codexPath ${bad}`));
+});
+
+test("codex installed but logged out is unavailable, says to run codex login, and the role falls through", async () => {
+  const c = await connect({ FAKE_CODEX_LOGGED_OUT: "1", CREW_SCOUT: "chatgpt,local" });
+  const out = await call(c, "crew_status", {});
+  assert.match(out, /❌ \*\*chatgpt\*\* \(codex-cli\): codex-cli 0\.0\.0-fake is installed but not logged in: run `codex login` in a terminal/);
+  assert.match(out, /\*\*scout\*\* → local \(skipping 1 unavailable\)/);
+  // The words decide, even if a codex said so with exit code 0.
+  const c1 = await connect({ FAKE_CODEX_LOGGED_OUT: "exit0" });
+  assert.match(await call(c1, "crew_status", {}), /❌ \*\*chatgpt\*\* \(codex-cli\): .*not logged in/);
+  // Logged in, the same fake is available.
+  const c2 = await connect();
+  assert.match(await call(c2, "crew_status", {}), /✅ \*\*chatgpt\*\* \(codex-cli\): codex-cli 0\.0\.0-fake/);
+});
+
 test("citation check does not blame a paragraph's first identifier on every citation", async () => {
   const c = await connect();
   const out = await call(c, "crew_check_citations", {
