@@ -27,7 +27,7 @@ The benchmark (`npm run bench`, see `bench/README.md`) needs a local model and i
 - **A test for the behaviour it changes.** Bugs get a test that fails without the fix. Most
   behaviour is tested end to end in `test/e2e.test.mjs` with a scripted fake model; follow the
   patterns there.
-- **`npm test` green** on Node 20 and 22. CI runs it on Ubuntu and Windows.
+- **`npm test` green** on Node 20, 22 and 26. CI runs it on Ubuntu and Windows.
 - **Docs that match.** If users can see the change (a tool, an option, a default, an output
   line), update `README.md`, and add a line under `[Unreleased]` in `CHANGELOG.md`.
 - **Synthetic fixtures only.** Tests and examples must not contain code, paths, names or data
