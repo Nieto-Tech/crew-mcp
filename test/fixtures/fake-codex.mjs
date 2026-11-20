@@ -4,6 +4,12 @@ import fs from "node:fs";
 const args = process.argv.slice(2);
 if (process.env.CODEX_CALLS) fs.appendFileSync(process.env.CODEX_CALLS, args.join(" ") + "\n");
 if (args.includes("--version")) { console.log("codex-cli 0.0.0-fake"); process.exit(0); }
+// FAKE_CODEX_LOGGED_OUT=1 answers `login status` as a real codex does with no login; "exit0" says so but exits 0.
+if (args[0] === "login" && args[1] === "status") {
+  if (process.env.FAKE_CODEX_LOGGED_OUT) { console.error("Not logged in"); process.exit(process.env.FAKE_CODEX_LOGGED_OUT === "exit0" ? 0 : 1); }
+  console.error("Logged in using ChatGPT");
+  process.exit(0);
+}
 const out = args[args.indexOf("-o") + 1];
 // Model names script the fake for panel tests: "slow-<ms>" answers after a delay, "fail" exits non-zero.
 // CODEX_TIMES, when set, gets "start|end <model> <epoch ms>" lines so a test can see calls overlap.

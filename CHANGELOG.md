@@ -7,6 +7,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- `crew_status` and panels no longer report Codex as "not installed" when it is installed
+  under another nvm Node version, which is what a Node upgrade leaves behind. They name those
+  versions, the `npm i -g` to run under the Node crew uses, and say the Codex login is kept.
+- A Codex that is installed but logged out is now reported as unavailable with "run
+  `codex login`" (from `codex login status`), so roles fall through to the next worker
+  instead of failing at call time.
 - A worker that times out under `crew_second_opinion` `depth: "quick"` no longer says to
   raise its `timeoutMs` in the config. Quick depth's 150 s cap overrides that setting, so the
   error now says the cap applied and to ask for `depth: "deep"`.

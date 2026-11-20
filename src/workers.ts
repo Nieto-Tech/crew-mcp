@@ -5,7 +5,7 @@ import { budgetsFor, userConfigPath, type CrewConfig, type Limits, type WorkerCo
 import { acquire } from "./lane.js";
 import { isLocalWorker, loadPolicy, policyReason, type Policy } from "./policy.js";
 import { ConnectionLostError, OllamaProvider, OpenAIProvider, diagLine, runAgent, secs, type AgentStats, type AnswerSpec, type FinalRetry, type Reformat, type ReformatDetail } from "./agent.js";
-import { runCodex } from "./codex.js";
+import { codexUnderNodeVersions, runCodex } from "./codex.js";
 import { launchSpec } from "./spawncmd.js";
 import { Budget, Workspace } from "./workspace.js";
 import { log } from "./log.js";
@@ -30,6 +30,33 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
     p,
     new Promise<T>((_, rej) => (t = setTimeout(() => rej(new Error(`timed out after ${ms}ms`)), ms))),
   ]).finally(() => clearTimeout(t));
+}
+
+/**
+ * True only when `codex login status` says "Not logged in". Anything else (logged in, an older codex
+ * without the subcommand, a timeout) leaves the worker available: the real call will say what's wrong.
+ */
+async function codexLoggedOut(bin: string): Promise<boolean> {
+  const l = launchSpec(bin, ["login", "status"]);
+  // Codex exits 1 when logged out, but the words decide, not the exit code.
+  const out = await execFileAsync(l.command, l.args, { windowsVerbatimArguments: l.windowsVerbatimArguments, timeout: 5_000 }).catch((e: any) => e);
+  return /not logged in/i.test(`${out?.stdout ?? ""}\n${out?.stderr ?? ""}`);
+}
+
+/** Why codex couldn't be started, and the fix. A Node upgrade under nvm is the usual cause, so look for that first. */
+function codexMissing(w: WorkerConfig): string {
+  if (w.codexPath) return `codex CLI not found at codexPath ${w.codexPath} (npm i -g @openai/codex, then codex login)`;
+  const found = codexUnderNodeVersions();
+  const mine = found.find((f) => f.version === process.version);
+  if (mine)
+    return `codex is installed for Node ${process.version} (${mine.file}) but that directory isn't on crew's PATH: set codexPath to ${mine.file}`;
+  if (!found.length) return "codex CLI not installed (npm i -g @openai/codex, then codex login)";
+  return (
+    `codex CLI not on PATH: it is installed only under other Node versions (${found.map((f) => f.version).join(", ")}), ` +
+    `and global npm packages stay with the Node version they were installed under. ` +
+    `Run \`npm i -g @openai/codex\` with Node ${process.version}, the one crew runs on. ` +
+    `Codex's login (~/.codex) is kept, so there is no need to log in again. Or set codexPath to ${found[0].file}.`
+  );
 }
 
 /** Cheap health check so a role can fall through to the next worker. */
@@ -75,10 +102,12 @@ export async function checkWorker(name: string, w: WorkerConfig): Promise<Availa
     } else {
       const l = launchSpec(w.codexPath || "codex", ["--version"]);
       const { stdout } = await withTimeout(execFileAsync(l.command, l.args, { windowsVerbatimArguments: l.windowsVerbatimArguments }), 5_000);
-      a = { ok: true, detail: `${stdout.trim()}${w.model ? ` (model ${w.model})` : ""}` };
+      a = (await codexLoggedOut(w.codexPath || "codex"))
+        ? { ok: false, detail: `${stdout.trim()} is installed but not logged in: run \`codex login\` in a terminal (crew uses Codex's own login)` }
+        : { ok: true, detail: `${stdout.trim()}${w.model ? ` (model ${w.model})` : ""}` };
     }
   } catch (e: any) {
-    if (e?.code === "ENOENT") a = { ok: false, detail: "codex CLI not installed (npm i -g @openai/codex, then codex login)" };
+    if (e?.code === "ENOENT") a = { ok: false, detail: codexMissing(w) };
     else if (w.provider === "ollama" && /redirect/i.test(e?.cause?.message || ""))
       a = { ok: false, detail: `Ollama at ${w.baseUrl} answered with a redirect, which crew never follows; point baseUrl at the server itself` };
     else if (w.provider === "ollama") a = { ok: false, detail: `Ollama not reachable at ${w.baseUrl || "http://localhost:11434"} (${e.message})` };
